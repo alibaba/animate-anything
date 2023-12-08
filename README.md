@@ -3,7 +3,10 @@ Project page: https://animationai.github.io/AnimateAnything/
 
 Arxiv Link: https://arxiv.org/abs/2311.12886
 
-<video src="docs/4_sr.mp4" controls title="Barbie"></video>
+
+https://github.com/alibaba/animate-anything/assets/1107525/4f50f965-7de5-4d8e-a07a-9bba6daaa32b
+
+
 A girl is talking.
 
 | Reference Image  | Motion Mask | GIF |
