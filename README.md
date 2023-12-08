@@ -77,6 +77,18 @@ cd alilab
 python inference_video.py
 ```
 
+## Bibtex
+Please cite this paper if you use code in this repository:
+```
+@misc{dai2023animateanything,
+      title={AnimateAnything: Fine-Grained Open Domain Image Animation with Motion Guidance}, 
+      author={Zuozhuo Dai and Zhenghao Zhang and Yao Yao and Bingxue Qiu and Siyu Zhu and Long Qin and Weizhi Wang},
+      year={2023},
+      eprint={2311.12886},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
+}
+```
 ## Shoutouts
 
 - [Text-To-Video-Finetuning](https://github.com/ExponentialML/Text-To-Video-Finetuning.git)
