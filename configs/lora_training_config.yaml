@@ -1,0 +1,195 @@
+# Pretrained diffusers model path.
+pretrained_model_path: "./models/model_scope_diffusers/" #https://huggingface.co/damo-vilab/text-to-video-ms-1.7b/tree/main
+
+# The folder where your training outputs will be placed.
+output_dir: "./outputs"
+
+# You can train multiple datasets at once. They will be joined together for training.
+# Simply remove the line you don't need, or keep them all for mixed training.
+
+# 'image': A folder of images and captions (.txt)
+# 'folder': A folder a videos and captions (.txt)
+# 'json': The JSON file created with automatic BLIP2 captions using https://github.com/ExponentialML/Video-BLIP2-Preprocessor
+# 'single_video': A single video file.mp4 and text prompt
+dataset_types: 
+  - 'image'
+  - 'folder'
+  - 'json'
+  - 'single_video'
+
+# Adds offset noise to training. See https://www.crosslabs.org/blog/diffusion-with-offset-noise
+offset_noise_strength: 0.1
+use_offset_noise: False
+
+# When True, this extends all items in all enabled datasets to the highest length. 
+# For example, if you have 200 videos and 10 images, 10 images will be duplicated to the length of 200. 
+extend_dataset: False
+
+# Caches the latents (Frames-Image -> VAE -> Latent) to a HDD or SDD. 
+# The latents will be saved under your training folder, and loaded automatically for training.
+# This both saves memory and speeds up training and takes very little disk space.
+cache_latents: True
+
+# If you have cached latents set to `True` and have a directory of cached latents,
+# you can skip the caching process and load previously saved ones. 
+cached_latent_dir: null #/path/to/cached_latents
+
+# Train the text encoder. Leave at false to use LoRA only (Recommended).
+train_text_encoder: False
+
+# https://github.com/cloneofsimo/lora
+# Use LoRA to train extra layers whilst saving memory. It trains both a LoRA & the model itself.
+# This works slightly different than vanilla LoRA and DOES NOT save a separate file.
+# It is simply used as a mechanism for saving memory by keeping layers frozen and training the residual.
+
+# Use LoRA for the UNET model.
+use_unet_lora: True
+
+# Use LoRA for the Text Encoder.
+use_text_lora: True
+
+# Use trained LoRA to continue training with. Only LoRA files trained with this repository will work.
+# LoRA files are saved in the same directory as outputs under 'lora'.
+# To load them, they must have 'unet' and 'text_encoder' in their names.
+lora_path: ''
+
+# The modules to use for LoRA. Different from 'trainable_modules'.
+# This does trains the entire UNET's linear and convolution layers.
+# For potentially saved memory, uncomment the other lines, and comment out "UNet3DConditionModel" by using a #.
+unet_lora_modules:
+  # The entire UNET model
+  - "UNet3DConditionModel"
+
+  # The attention layers for spatial dimension (Image data).
+  #- "Transformer2D"
+  
+  # The convolution layers for spatial dimension.
+  #- "Transformer2DModel"
+
+  # The convolution layers for temporal dimension (Frame data)
+  #- "TemporalConvLayer"
+
+  # The attention layers for the temporal dimension (Frame data).
+  #- "TransformerTemporalModel"
+  
+# The modules to use for LoRA. Different from `trainable_text_modules`.
+text_encoder_lora_modules:
+  - "CLIPEncoderLayer"
+
+# The rank for LoRA training. With ModelScope, the maximum should be 1024. 
+# VRAM increases with higher rank, lower when decreased.
+lora_rank: 32
+
+# Training data parameters
+train_data:
+
+  # The width and height in which you want your training data to be resized to.
+  width: 256      
+  height: 256
+
+  # This will find the closest aspect ratio to your input width and height. 
+  # For example, 512x512 width and height with a video of resolution 1280x720 will be resized to 512x256
+  use_bucketing: True
+
+  # The start frame index where your videos should start (Leave this at one for json and folder based training).
+  sample_start_idx: 1
+
+  # Used for 'folder'. The rate at which your frames are sampled. Does nothing for 'json' and 'single_video' dataset.
+  fps: 24
+
+  # For 'single_video' and 'json'. The number of frames to "step" (1,2,3,4) (frame_step=2) -> (1,3,5,7, ...).  
+  frame_step: 5
+
+  # The number of frames to sample. The higher this number, the higher the VRAM (acts similar to batch size).
+  n_sample_frames: 8
+  
+  # 'single_video'
+  single_video_path: "path/to/single/video.mp4"
+
+  # The prompt when using a a single video file
+  single_video_prompt: ""
+
+  # Fallback prompt if caption cannot be read. Enabled for 'image' and 'folder'.
+  fallback_prompt: ''
+  
+  # 'folder'
+  path: "path/to/folder/of/videos/"
+
+  # 'json'
+  json_path: 'path/to/train/json/'
+
+  # 'image'
+  image_dir: 'path/to/image/directory'
+
+  # The prompt for all image files. Leave blank to use caption files (.txt) 
+  single_img_prompt: ""
+
+# Validation data parameters.
+validation_data:
+
+  # A custom prompt that is different from your training dataset. 
+  prompt: ""
+
+  # Whether or not to sample preview during training (Requires more VRAM).
+  sample_preview: True
+
+  # The number of frames to sample during validation.
+  num_frames: 16
+
+  # Height and width of validation sample.
+  width: 256
+  height: 256
+
+  # Number of inference steps when generating the video.
+  num_inference_steps: 25
+
+  # CFG scale
+  guidance_scale: 9
+
+# Learning rate for AdamW
+learning_rate: 5e-6
+
+# Weight decay. Higher = more regularization. Lower = closer to dataset.
+adam_weight_decay: 1e-2
+
+# Optimizer parameters for the UNET. Overrides base learning rate parameters.
+extra_unet_params: null
+  #learning_rate: 1e-5
+  #adam_weight_decay: 1e-4
+
+# Optimizer parameters for the Text Encoder. Overrides base learning rate parameters.
+extra_text_encoder_params: null
+  #learning_rate: 5e-6
+  #adam_weight_decay: 0.2
+
+# How many batches to train. Not to be confused with video frames.
+train_batch_size: 1
+
+# Maximum number of train steps. Model is saved after training.
+max_train_steps: 10000
+
+# Saves a model every nth step.
+checkpointing_steps: 2500
+
+# How many steps to do for validation if sample_preview is enabled.
+validation_steps: 100
+
+# Seed for validation.
+seed: 64
+
+# Whether or not we want to use mixed precision with accelerate
+mixed_precision: "fp16"
+
+# This seems to be incompatible at the moment.
+use_8bit_adam: False 
+
+# Trades VRAM usage for speed. You lose roughly 20% of training speed, but save a lot of VRAM.
+# If you need to save more VRAM, it can also be enabled for the text encoder, but reduces speed x2.
+gradient_checkpointing: True
+text_encoder_gradient_checkpointing: False
+
+# Xformers must be installed for best memory savings and performance (< Pytorch 2.0)
+enable_xformers_memory_efficient_attention: False
+
+# Use scaled dot product attention (Only available with >= Torch 2.0)
+enable_torch_2_attn: True

@@ -1,0 +1,17 @@
+accelerate==0.21.0
+torch==2.0.0
+torchvision
+diffusers==0.17.0
+git+https://github.com/microsoft/LoRA
+transformers==4.26.1
+einops
+decord
+tqdm
+safetensors
+omegaconf
+opencv-python
+pydantic
+compel
+easydict
+rotary_embedding_torch
+imageio
