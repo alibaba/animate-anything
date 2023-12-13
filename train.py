@@ -1052,9 +1052,7 @@ def eval(pipeline, vae_processor, validation_data, out_file, index, forward_t=25
     b, c, f, h, w = initial_latents.shape
     mask = T.Resize([h, w], antialias=False)(mask)
     mask = rearrange(mask, 'b h w -> b 1 1 h w')
-    if 'strength' not in validation_data:
-        validation_data.strength=3
-    motion_strength=[validation_data.strength]
+    motion_strength = validation_data.get('strength', index+2)
     with torch.no_grad():
         video_frames, video_latents = pipeline(
             prompt=prompt,
