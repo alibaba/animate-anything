@@ -11,7 +11,6 @@ A girl is talking.
 | ![Input image](docs/fish.jpg)  | ![](docs/fish_mask.png) | ![](docs/fish.gif) The fish and tadpoles are playing.|
 
 
-
 ## Getting Started
 This repository is based on [Text-To-Video-Finetuning](https://github.com/ExponentialML/Text-To-Video-Finetuning.git).
 
@@ -33,13 +32,15 @@ pip install -r requirements.txt
 ```
 
 ### Pretrained models
-Download pretrained [motion mask and motion strength model](https://cloudbook-public-production.oss-cn-shanghai.aliyuncs.com/animation/mask_motion_v1.tar) and unzip it in the directory output/latent/mask_moition_v1
-
+| Resolution  | Model Path | Description |
+| ------------- | ------------- | -------|
+| 384x384  | [animate_anything_384](https://cloudbook-public-production.oss-cn-shanghai.aliyuncs.com/animation/aimate_anything_384_v1.01.tar) | Finetuned on 60K clips, 2s in 8fps |
+| 512x512  | [animate_anything_512](https://cloudbook-public-production.oss-cn-shanghai.aliyuncs.com/animation/aimate_anything_512_v1.01.tar) | Finetuned on 60K clips, 2s in 8fps 
 
 ## Running inference
-Please download the checkpoints to output/latent, then run the following command:
+Please download the pretrained models to output/latent, then run the following command. Please replace the {download_model} to your download model name:
 ```bash
-python train.py --config output/latent/mask_motion_v1/config.yaml --eval validation_data.prompt_image=example/barbie2.jpg validation_data.prompt='A cartoon girl is talking.'
+python train.py --config output/latent/{download_model}/config.yaml --eval validation_data.prompt_image=example/barbie2.jpg validation_data.prompt='A cartoon girl is talking.'
 ```
 
 To control the motion area, we can use the labelme to generate a binary mask. First, we use labelme to drag the polygon the reference image.
@@ -55,14 +56,14 @@ labelme_json_to_dataset qingming2.json
 
 Then run the following command for inference:
 ```bash
-python train.py --config output/latent/mask_motion_v1/config.yaml --eval validation_data.prompt_image=example/qingming2.jpg validation_data.prompt='Peoples are walking on the street.' validation_data.mask=example/qingming2_label.jpg 
+python train.py --config output/latent/{download_model}/config.yaml --eval validation_data.prompt_image=example/qingming2.jpg validation_data.prompt='Peoples are walking on the street.' validation_data.mask=example/qingming2_label.jpg 
 ```
 ![](docs/qingming2.gif)
 
 
 User can ajust the motion strength by using the mask motion model:
 ```bash
-python train.py --config output/latent/mask_motion_v1/
+python train.py --config output/latent/{download_model}/
 config.yaml --eval validation_data.prompt_image=example/qingming2.jpg validation_data.prompt='Peoples are walking on the street.' validation_data.mask=example/qingming2_label.jpg validation_data.strength=5
 ```
 ## Video super resolution

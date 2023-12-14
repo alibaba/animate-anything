@@ -1038,21 +1038,17 @@ def eval(pipeline, vae_processor, validation_data, out_file, index, forward_t=25
         mask = mask.resize((validation_data.width, validation_data.height))
         np_mask = np.array(mask)
         np_mask[np_mask!=0]=255
-        out_mask_path = out_file.replace(".gif", "_mask.jpg")
-        Image.fromarray(np_mask).save(out_mask_path)
     else:
-        mask = generate_center_mask(input_image[0])
-        np_mask = mask[0]
-        np_mask[:] = 255
-        out_mask_path = out_file.replace(".gif", "_mask.jpg")
-        Image.fromarray(np_mask).save(out_mask_path)
+        np_mask = np.ones([validation_data.height, validation_data.width], dtype=np.uint8)*255
+    out_mask_path = os.path.splitext(out_file)[0] + "_mask.jpg"
+    Image.fromarray(np_mask).save(out_mask_path)
 
     initial_latents, timesteps = DDPM_forward_timesteps(input_image_latents, forward_t, validation_data.num_frames, diffusion_scheduler) 
     mask = T.ToTensor()(np_mask).to(dtype).to(device)
     b, c, f, h, w = initial_latents.shape
     mask = T.Resize([h, w], antialias=False)(mask)
     mask = rearrange(mask, 'b h w -> b 1 1 h w')
-    motion_strength = validation_data.get('strength', index+2)
+    motion_strength = validation_data.get("strength", index+2)
     with torch.no_grad():
         video_frames, video_latents = pipeline(
             prompt=prompt,
@@ -1064,14 +1060,12 @@ def eval(pipeline, vae_processor, validation_data, out_file, index, forward_t=25
             guidance_scale=validation_data.guidance_scale,
             condition_latent=input_image_latents,
             mask=mask,
-            motion=motion_strength,
+            motion=[motion_strength],
             return_dict=False,
             timesteps=timesteps,
         )
-    #export_to_video(video_frames, out_file, train_data.get('fps', 8))
     if preview:
-        imageio.mimwrite(out_file, video_frames, duration=125, loop=0)
-        imageio.mimwrite(out_file.replace(".gif", ".mp4"), video_frames, fps=8, quality=9)
+        imageio.mimwrite(out_file, video_frames, fps=validation_data.get('fps', 8))
     real_motion_strength = calculate_latent_motion_score(video_latents).cpu().numpy()[0]
     precision = calculate_motion_precision(video_frames, np_mask)
     print(f"save file {out_file}, motion strength {motion_strength} -> {real_motion_strength}, motion precision {precision}")
@@ -1110,13 +1104,13 @@ def batch_eval(unet, text_encoder, vae, vae_processor, lora_manager, pretrained_
 
     motion_errors = []
     motion_precisions = []
-    iters = 10
+    iters = 5
     motion_precision = 0
     for t in range(iters):
         name= os.path.basename(validation_data.prompt_image)
         out_file_dir = f"{output_dir}/{name.split('.')[0]}"
         os.makedirs(out_file_dir, exist_ok=True)
-        out_file = f"{out_file_dir}/{global_step+t}.gif"
+        out_file = f"{out_file_dir}/{global_step+t}.mp4"
         precision = eval(pipeline, vae_processor, 
             validation_data, out_file, t, forward_t=validation_data.num_inference_steps, preview=preview)
         motion_precision += precision
