@@ -3,11 +3,7 @@ Project page: https://animationai.github.io/AnimateAnything/
 
 Arxiv Link: https://arxiv.org/abs/2311.12886
 
-
-https://github.com/alibaba/animate-anything/assets/1107525/4f50f965-7de5-4d8e-a07a-9bba6daaa32b
-
-
-A girl is talking.
+https://github.com/alibaba/animate-anything/assets/1107525/e2659674-c813-402a-8a85-e620f0a6a454
 
 | Reference Image  | Motion Mask | GIF |
 | ------------- | ------------- | -------- |
