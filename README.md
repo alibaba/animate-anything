@@ -3,7 +3,10 @@ Project page: https://animationai.github.io/AnimateAnything/
 
 Arxiv Link: https://arxiv.org/abs/2311.12886
 
-<video src="docs/4_sr.mp4" controls title="Barbie"></video>
+
+https://github.com/alibaba/animate-anything/assets/1107525/4f50f965-7de5-4d8e-a07a-9bba6daaa32b
+
+
 A girl is talking.
 
 | Reference Image  | Motion Mask | GIF |
@@ -31,14 +34,8 @@ conda activate animation
 pip install -r requirements.txt
 ```
 
-### Pretrained models
-| Resolution  | Model Path | Description |
-| ------------- | ------------- | -------|
-| 384x384  | [animate_anything_384](https://cloudbook-public-production.oss-cn-shanghai.aliyuncs.com/animation/aimate_anything_384_v1.01.tar) | Finetuned on 60K clips, 2s in 8fps |
-| 512x512  | [animate_anything_512](https://cloudbook-public-production.oss-cn-shanghai.aliyuncs.com/animation/aimate_anything_512_v1.01.tar) | Finetuned on 60K clips, 2s in 8fps 
-
 ## Running inference
-Please download the pretrained models to output/latent, then run the following command. Please replace the {download_model} to your download model name:
+Please download the [pretrained model](https://cloudbook-public-production.oss-cn-shanghai.aliyuncs.com/animation/aimate_anything_512_v1.01.tar) to output/latent, then run the following command. Please replace the {download_model} to your download model name:
 ```bash
 python train.py --config output/latent/{download_model}/config.yaml --eval validation_data.prompt_image=example/barbie2.jpg validation_data.prompt='A cartoon girl is talking.'
 ```
@@ -75,6 +72,18 @@ cd alilab
 python inference_video.py
 ```
 
+## Bibtex
+Please cite this paper if you use code in this repository:
+```
+@misc{dai2023animateanything,
+      title={AnimateAnything: Fine-Grained Open Domain Image Animation with Motion Guidance}, 
+      author={Zuozhuo Dai and Zhenghao Zhang and Yao Yao and Bingxue Qiu and Siyu Zhu and Long Qin and Weizhi Wang},
+      year={2023},
+      eprint={2311.12886},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
+}
+```
 ## Shoutouts
 
 - [Text-To-Video-Finetuning](https://github.com/ExponentialML/Text-To-Video-Finetuning.git)
