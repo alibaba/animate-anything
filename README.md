@@ -31,7 +31,7 @@ pip install -r requirements.txt
 ```
 
 ## Running inference
-Please download the [pretrained model](https://cloudbook-public-production.oss-cn-shanghai.aliyuncs.com/animation/aimate_anything_512_v1.01.tar) to output/latent, then run the following command. Please replace the {download_model} to your download model name:
+Please download the [pretrained model](oss://cloudbook-public-production/animation/animate_anything_512_v1.01.tar) to output/latent, then run the following command. Please replace the {download_model} to your download model name:
 ```bash
 python train.py --config output/latent/{download_model}/config.yaml --eval validation_data.prompt_image=example/barbie2.jpg validation_data.prompt='A cartoon girl is talking.'
 ```
