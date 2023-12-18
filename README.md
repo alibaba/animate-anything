@@ -9,6 +9,9 @@ https://github.com/alibaba/animate-anything/assets/1107525/e2659674-c813-402a-8a
 | ------------- | ------------- | -------- |
 | ![Input image](docs/fish.jpg)  | ![](docs/fish_mask.png) | ![](docs/fish.gif) The fish and tadpoles are playing.|
 
+## News
+2023.12.18: Update more stable model animate_anything_512_v1.02
+
 
 ## Getting Started
 This repository is based on [Text-To-Video-Finetuning](https://github.com/ExponentialML/Text-To-Video-Finetuning.git).
@@ -31,7 +34,7 @@ pip install -r requirements.txt
 ```
 
 ## Running inference
-Please download the [pretrained model](https://cloudbook-public-production.oss-cn-shanghai.aliyuncs.com/animation/animate_anything_512_v1.01.tar) to output/latent, then run the following command. Please replace the {download_model} to your download model name:
+Please download the [pretrained model](https://cloudbook-public-production.oss-cn-shanghai.aliyuncs.com/animation/animate_anything_512_v1.02.tar) to output/latent, then run the following command. Please replace the {download_model} to your download model name:
 ```bash
 python train.py --config output/latent/{download_model}/config.yaml --eval validation_data.prompt_image=example/barbie2.jpg validation_data.prompt='A cartoon girl is talking.'
 ```

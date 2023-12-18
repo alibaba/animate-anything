@@ -1005,7 +1005,7 @@ def finetune_unet(batch, use_offset_noise,
         if motion_strength:
             motion_loss = F.mse_loss(latent_motion, 
                 calculate_latent_motion_score(predict_x0))
-            loss += 0.01 * motion_loss
+            loss += 0.001 * motion_loss
         losses.append(loss)
         
         # This was most likely single frame training or a single image.
@@ -1104,7 +1104,7 @@ def batch_eval(unet, text_encoder, vae, vae_processor, lora_manager, pretrained_
 
     motion_errors = []
     motion_precisions = []
-    iters = 5
+    iters = 6
     motion_precision = 0
     for t in range(iters):
         name= os.path.basename(validation_data.prompt_image)
