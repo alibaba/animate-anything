@@ -271,6 +271,8 @@ class VideoBLIPDataset(Dataset):
 
         if self.return_motion:
             example['motion'] = calculate_motion_score(video.permute([0,2,3,1]).numpy())
+            if example['motion'] < 10:
+                return self.__getitem__(index+1)
         return example
 
 
