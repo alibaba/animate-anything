@@ -915,7 +915,7 @@ def eval(pipeline, vae_processor, validation_data, out_file, index, forward_t=25
             num_frames=validation_data.num_frames,
             num_inference_steps=validation_data.num_inference_steps,
             decode_chunk_size=7,
-            motion_bucket_id=127-index*10,
+            motion_bucket_id=127,
         ).frames[0]
     if preview:
         imageio.mimwrite(out_file, video_frames, duration=175, loop=0)
@@ -950,7 +950,7 @@ def main_eval(
     if val_file is not None:
         val_list = json.load(open(val_file))[:3]
     else:
-        val_list = [validation_data.prompt_image, validation_data.prompt]
+        val_list = [[validation_data.prompt_image, validation_data.prompt]]
 
     output_dir = "output/svd_out"
     iters = 6
@@ -960,7 +960,7 @@ def main_eval(
             out_file_dir = f"{output_dir}/{name.split('.')[0]}"
             os.makedirs(out_file_dir, exist_ok=True)
             out_file = f"{out_file_dir}/{t}.gif"
-            validation_data.prompt_image = os.path.join("output/example", name)
+            validation_data.prompt_image = name
             validation_data.prompt = prompt
             eval(pipeline, vae_processor, validation_data, out_file, t)
             print("save file", out_file)
