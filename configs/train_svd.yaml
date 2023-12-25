@@ -127,7 +127,7 @@ train_data:
 
   # Used for 'folder'. The rate at which your frames are sampled. Does nothing for 'json' and 'single_video' dataset.
   # high fps, lower frame step, move slowly
-  fps: 7
+  fps: 14
 
   # For 'single_video' and 'json'. The number of frames to "step" (1,2,3,4) (frame_step=2) -> (1,3,5,7, ...).  
   frame_step: 1
@@ -156,7 +156,7 @@ train_data:
   image_json: '/vlp/datasets/images/coco/coco_karpathy_train.json'
 
   video_dir: '/webvid/webvid/data/videos'
-  video_json: '/webvid/webvid/data/20K.json'
+  video_json: '/webvid/webvid/data/40K.json'
   # The prompt for all image files. Leave blank to use caption files (.txt) 
   single_img_prompt: ""
 
@@ -167,7 +167,7 @@ validation_data:
   # A custom prompt that is different from your training dataset. 
   prompt: "a girl moves body"
 
-  prompt_image: "output/example/girl5.jpg"
+  prompt_image: "output/example/girl4.jpg"
 
   # Whether or not to sample preview during training (Requires more VRAM).
   sample_preview: True

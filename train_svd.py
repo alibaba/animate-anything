@@ -449,14 +449,13 @@ def finetune_unet(pipeline, batch, use_offset_noise,
     images = _resize_with_antialiasing(pixel_values[:,0], (224, 224))
     images = (images + 1.0) / 2.0 # [-1, 1] -> [0, 1]
     images = pipeline.feature_extractor(
-        images=images,
+        images=[images[i] for i in range(images.shape[0])],
         do_normalize=True,
         do_center_crop=False,
         do_resize=False,
         do_rescale=False,
         return_tensors="pt",
     ).pixel_values 
-
     image_embeddings = pipeline._encode_image(images, device, 1, False)
     negative_image_embeddings = torch.zeros_like(image_embeddings)
 

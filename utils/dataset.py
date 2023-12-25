@@ -127,6 +127,7 @@ class VideoBLIPDataset(Dataset):
             use_bucketing: bool = False,
             return_mask: bool=False,
             return_motion: bool=False,
+            motion_threshold = 50,
             **kwargs
     ):
         self.vid_types = (".mp4", ".avi", ".mov", ".webm", ".flv", ".mjpeg")
@@ -138,7 +139,7 @@ class VideoBLIPDataset(Dataset):
         self.train_data = self.load_from_json(json_path, json_data)
         self.return_mask = return_mask
         self.return_motion = return_motion
-
+        self.motion_threshold = motion_threshold
         self.width = width
         self.height = height
 
@@ -146,9 +147,8 @@ class VideoBLIPDataset(Dataset):
         self.sample_start_idx = sample_start_idx
         self.fps = fps
         self.transform = T.Compose([
-            #T.RandomResizedCrop(size=(height, width), scale=(0.5, 1.0), antialias=False)
-            T.Resize(min(height, width), antialias=False),
-            T.CenterCrop([height, width])
+            T.RandomResizedCrop(size=(height, width), scale=(0.8, 1.0), 
+                ratio=(width/height, width/height), antialias=False)
         ])
 
     def build_json(self, json_data):
@@ -271,8 +271,8 @@ class VideoBLIPDataset(Dataset):
 
         if self.return_motion:
             example['motion'] = calculate_motion_score(video.permute([0,2,3,1]).numpy())
-            if example['motion'] < 10:
-                return self.__getitem__(index+1)
+            if example['motion'] < self.motion_threshold:
+                return self.__getitem__(random.randint(0, len(self)-1))
         return example
 
 
@@ -584,6 +584,7 @@ class VideoJsonDataset(Dataset):
         use_bucketing: bool = False,
         return_mask = False,
         return_motion = False,
+        motion_threshold = 50,
         **kwargs
     ):
         self.tokenizer = tokenizer
@@ -600,9 +601,10 @@ class VideoJsonDataset(Dataset):
         self.fps = fps
         self.return_mask = return_mask
         self.return_motion = return_motion
+        self.motion_threshold = motion_threshold
         self.transform = T.Compose([
-            T.Resize(min(height, width), antialias=False),
-            T.RandomCrop([height, width])
+            T.RandomResizedCrop(size=(height, width), scale=(0.8, 1.0), 
+                ratio=(width/height, width/height), antialias=False)
         ])
 
 
@@ -683,6 +685,8 @@ class VideoJsonDataset(Dataset):
             example['mask'] = mask
         if self.return_motion:
             example['motion'] = calculate_motion_score(video.permute([0,2,3,1]).numpy())
+            if example['motion'] < self.motion_threshold:
+                return self.__getitem__(random.randint(0, len(self)-1))
         return example
 
 class CachedDataset(Dataset):

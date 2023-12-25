@@ -76,17 +76,16 @@ def accelerate_set_verbose(accelerator):
 
 def get_train_dataset(dataset_types, train_data, tokenizer):
     train_datasets = []
+    dataset_cls = [VideoJsonDataset, SingleVideoDataset, ImageDataset, VideoFolderDataset, VideoBLIPDataset]
+    dataset_map = {d.__getname__(): d for d in dataset_cls}
 
     # Loop through all available datasets, get the name, then add to list of data to process.
-    for DataSet in [VideoJsonDataset, SingleVideoDataset, ImageDataset, VideoFolderDataset, VideoBLIPDataset]:
-        for dataset in dataset_types:
-            if dataset == DataSet.__getname__():
-                train_datasets.append(DataSet(**train_data, tokenizer=tokenizer))
-
-    if len(train_datasets) > 0:
-        return train_datasets
-    else:
-        raise ValueError("Dataset type not found: 'json', 'single_video', 'folder', 'image'")
+    for dataset in dataset_types:
+        if dataset in dataset_map:
+            train_datasets.append(dataset_map[dataset](**train_data, tokenizer=tokenizer))
+        else:
+            raise ValueError(f"Dataset type not found: {dataset} not in {dataset_map.keys()}")
+    return train_datasets
 
 def extend_datasets(datasets, dataset_items, extend=False):
     biggest_data_len = max(x.__len__() for x in datasets)
@@ -409,7 +408,7 @@ def enforce_zero_terminal_snr(betas):
     return betas
 
 def should_sample(global_step, validation_steps, validation_data):
-    return (global_step % validation_steps == 0 or global_step == 1)  \
+    return (global_step % validation_steps == 0 or global_step == 5)  \
     and validation_data.sample_preview
 
 def save_pipe(
@@ -924,8 +923,7 @@ def finetune_unet(batch, use_offset_noise,
     vae.eval()
     # Convert videos to latent space
     pixel_values = batch["pixel_values"]
-
-
+    bsz = pixel_values.shape[0]
     if not cache_latents:
         latents = tensor_to_vae_latent(pixel_values, vae)
     else:
@@ -951,7 +949,6 @@ def finetune_unet(batch, use_offset_noise,
     # Sample noise that we'll add to the latents
     use_offset_noise = use_offset_noise and not rescale_schedule
     noise = sample_noise(latents, offset_noise_strength, use_offset_noise)
-    bsz = latents.shape[0]
 
     # Sample a random timestep for each video
     timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
