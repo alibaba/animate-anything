@@ -10,7 +10,9 @@ https://github.com/alibaba/animate-anything/assets/1107525/e2659674-c813-402a-8a
 | ![Input image](docs/fish.jpg)  | ![](docs/fish_mask.png) | ![](docs/fish.gif) The fish and tadpoles are playing.|
 
 ## News
-2023.12.18: Update more stable model animate_anything_512_v1.02
+**2023.12.27**: Support finetuning based on SVD model. Update SVD based animate_anything_svd_v1.0
+
+**2023.12.18**: Update model to animate_anything_512_v1.02
 
 
 ## Getting Started
@@ -71,8 +73,63 @@ cd alilab
 python inference_video.py
 ```
 
+## Training
+
+### Using Captions
+
+You can use caption files when training video. Simply place the videos into a folder and create a json with captions like this:
+
+```
+[
+      {"caption": "Cute monster character flat design animation video", "video": "000001_000050/1066697179.mp4"}, 
+      {"caption": "Landscape of the cherry blossom", "video": "000001_000050/1066688836.mp4"}
+]
+
+```
+Then in your config, make sure to set dataset_types to video_json and set the video_dir and video json path like this:
+```
+  - dataset_types: 
+      - video_json
+    train_data:
+      video_dir: '/webvid/webvid/data/videos'
+      video_json: '/webvid/webvid/data/40K.json'
+```
+### Process Automatically
+
+You can automatically caption the videos using the [Video-BLIP2-Preprocessor Script](https://github.com/ExponentialML/Video-BLIP2-Preprocessor) and set the dataset_types and json_path like this:
+```
+  - dataset_types: 
+      - video_blip
+    train_data:
+      json_path: 'blip_generated.json'
+```
+
+### Configuration
+
+The configuration uses a YAML config borrowed from [Tune-A-Video](https://github.com/showlab/Tune-A-Video) reposotories. 
+
+All configuration details are placed in `example/train_mask_motion.yaml`. Each parameter has a definition for what it does.
+
+
+### Finetuning anymate-anything
+You can finetune anymate-anything with text, motion mask, motion strength guidance on your own dataset. The following config requires around 30G GPU RAM. You can reduce the training video resolution and frames to reduce GPU RAM:
+```
+python train.py --config example/train_mask_motion.yaml pretrained_model_path=<download_model>
+```
+
+### Finetune Stable Video Diffusion:
+Stable Video Diffusion (SVD) img2vid model can generate high resolution videos. However, it does not have the text or motion mask control. You can finetune SVD with motioin mask guidance with the following commands and [pretrained model](https://cloudbook-public-production.oss-cn-shanghai.aliyuncs.com/animation/animate_anything_svd_v1.0.tar). This config requires around 80G GPU RAM.
+```
+python train_svd.py --config example/train_svd_mask.yaml pretrained_model_path=<download_model>
+```
+
+If you only want to finetune SVD on your own dataset without motion mask control, please use the following config:
+```
+python train_svd.py --config example/train_svd.yaml pretrained_model_path=<svd_model>
+```
+
 ## Bibtex
-Please cite this paper if you use code in this repository:
+Please cite this paper if you find the code is useful for your research:
 ```
 @misc{dai2023animateanything,
       title={AnimateAnything: Fine-Grained Open Domain Image Animation with Motion Guidance}, 

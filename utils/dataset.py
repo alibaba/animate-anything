@@ -42,14 +42,16 @@ def normalize_input(
         return  rearrange(item / 127.5 - 1.0, 'f h w c -> f c h w')
             
 def get_prompt_ids(prompt, tokenizer):
-    prompt_ids = tokenizer(
-            prompt,
-            truncation=True,
-            padding="max_length",
-            max_length=tokenizer.model_max_length,
-            return_tensors="pt",
-    ).input_ids
-
+    if tokenizer is None:
+        prompt_ids = torch.tensor([0])
+    else:
+        prompt_ids = tokenizer(
+                prompt,
+                truncation=True,
+                padding="max_length",
+                max_length=tokenizer.model_max_length,
+                return_tensors="pt",
+        ).input_ids[0]
     return prompt_ids
 
 def read_caption_file(caption_file):
@@ -260,7 +262,7 @@ class VideoBLIPDataset(Dataset):
         
         example = {
             "pixel_values": normalize_input(video),
-            "prompt_ids": prompt_ids[0],
+            "prompt_ids": prompt_ids,
             "text_prompt": prompt,
             'dataset': self.__getname__()
         }
@@ -379,7 +381,7 @@ class SingleVideoDataset(Dataset):
 
         example = {
             "pixel_values": normalize_input(video),
-            "prompt_ids": prompt_ids[0],
+            "prompt_ids": prompt_ids,
             "text_prompt": prompt,
             'dataset': self.__getname__()
         }
@@ -464,7 +466,7 @@ class ImageDataset(Dataset):
         example = {
             "pixel_values": normalize_input(img),
             "frames": img,
-            "prompt_ids": prompt_ids[0],
+            "prompt_ids": prompt_ids,
             "text_prompt": prompt, 
             'dataset': self.__getname__()
         }
@@ -536,15 +538,6 @@ class VideoFolderDataset(Dataset):
             )
         return video, vr
     
-    def get_prompt_ids(self, prompt):
-        return self.tokenizer(
-            prompt,
-            truncation=True,
-            padding="max_length",
-            max_length=self.tokenizer.model_max_length,
-            return_tensors="pt",
-        ).input_ids
-
     @staticmethod
     def __getname__(): return 'folder'
 
@@ -565,10 +558,10 @@ class VideoFolderDataset(Dataset):
         else:
             prompt = self.fallback_prompt
 
-        prompt_ids = self.get_prompt_ids(prompt)
+        prompt_ids = get_prompt_ids(prompt, self.tokenizer)
 
         return {"pixel_values": normalize_input(video[0]), "frames": video[0],
-                "prompt_ids": prompt_ids[0], "text_prompt": prompt, 'dataset': self.__getname__()}
+                "prompt_ids": prompt_ids, "text_prompt": prompt, 'dataset': self.__getname__()}
 
 class VideoJsonDataset(Dataset):
     def __init__(
@@ -646,15 +639,6 @@ class VideoJsonDataset(Dataset):
             video  = self.transform(video)
         return video
         
-    def get_prompt_ids(self, prompt):
-        return self.tokenizer(
-            prompt,
-            truncation=True,
-            padding="max_length",
-            max_length=self.tokenizer.model_max_length,
-            return_tensors="pt",
-        ).input_ids
-
     @staticmethod
     def __getname__(): return 'video_json'
 
@@ -674,15 +658,11 @@ class VideoJsonDataset(Dataset):
         except Exception as err:
             print("read video error", err, video_path)
             return self.__getitem__(index+1)
-        prompt_ids = self.get_prompt_ids(prompt)
-        example = {"pixel_values": normalize_input(video), "prompt_ids": prompt_ids[0], 
+        prompt_ids = get_prompt_ids(prompt, self.tokenizer)
+        example = {"pixel_values": normalize_input(video), "prompt_ids": prompt_ids, 
             "text_prompt": prompt, 'dataset': self.__getname__()}
         if self.return_mask:
             mask = get_moved_area_mask(video.permute([0,2,3,1]).numpy())
-            ratio = np.sum(mask==255)/(mask.shape[0]*mask.shape[1])
-            if ratio > 0.99:
-                return self.__getitem__(random.randint(0, len(self.video_files)-1))
-            example['mask'] = mask
         if self.return_motion:
             example['motion'] = calculate_motion_score(video.permute([0,2,3,1]).numpy())
             if example['motion'] < self.motion_threshold:

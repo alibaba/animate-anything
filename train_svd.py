@@ -7,6 +7,7 @@ import os
 import random
 import gc
 import copy
+import json
 
 from typing import Dict, Optional, Tuple
 from omegaconf import OmegaConf
@@ -47,6 +48,7 @@ import imageio
 
 
 from models.unet_3d_condition_mask import UNet3DConditionModel
+from models.pipeline import MaskStableVideoDiffusionPipeline
 from utils.lora_handler import LoraHandler, LORA_VERSIONS
 from utils.common import read_mask, generate_random_mask, slerp, calculate_motion_score, \
     read_video, calculate_motion_precision, calculate_latent_motion_score, \
@@ -124,10 +126,12 @@ def create_output_folders(output_dir, config):
 
     return out_dir
 
-def load_primary_models(pretrained_model_path):
-    tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_path, subfolder="tokenizer")
-    pipeline = StableVideoDiffusionPipeline.from_pretrained(pretrained_model_path)
-    return pipeline, tokenizer, pipeline.feature_extractor, pipeline.scheduler, pipeline.image_processor, \
+def load_primary_models(pretrained_model_path, eval=False):
+    if eval:
+        pipeline = StableVideoDiffusionPipeline.from_pretrained(pretrained_model_path, torch_dtype=torch.float16, variant='fp16')
+    else:
+        pipeline = StableVideoDiffusionPipeline.from_pretrained(pretrained_model_path)
+    return pipeline, None, pipeline.feature_extractor, pipeline.scheduler, pipeline.image_processor, \
         pipeline.image_encoder, pipeline.vae, pipeline.unet
 
 def convert_svd(pretrained_model_path, out_path):
@@ -137,7 +141,7 @@ def convert_svd(pretrained_model_path, out_path):
         pretrained_model_path, subfolder="unet_mask", low_cpu_mem_usage=False, ignore_mismatched_sizes=True)
     unet.conv_in.bias.data = copy.deepcopy(pipeline.unet.conv_in.bias)
     torch.nn.init.zeros_(unet.conv_in.weight)
-    unet.conv_in.weight.data[:,:-1]= copy.deepcopy(pipeline.unet.conv_in.weight)
+    unet.conv_in.weight.data[:,1:]= copy.deepcopy(pipeline.unet.conv_in.weight)
     new_pipeline = StableVideoDiffusionPipeline.from_pretrained(
         pretrained_model_path, unet=unet)
     new_pipeline.save_pretrained(out_path)
@@ -151,7 +155,7 @@ def _set_gradient_checkpointing(self, value=False):
                 
 def unet_and_text_g_c(unet, text_encoder, unet_enable, text_enable):
     _set_gradient_checkpointing(unet, value=unet_enable)
-    text_encoder._set_gradient_checkpointing(CLIPEncoder, value=text_enable)
+    text_encoder._set_gradient_checkpointing(text_enable)
 
 def freeze_models(models_to_freeze):
     for model in models_to_freeze:
@@ -424,13 +428,12 @@ def prompt_image(image, processor, encoder):
     return inputs
     
 def finetune_unet(pipeline, batch, use_offset_noise,
-    rescale_schedule, offset_noise_strength, unet, 
+    rescale_schedule, offset_noise_strength, unet, motion_mask, 
     P_mean=0.7, P_std=1.6, noise_aug_strength=0.02):
     pipeline.vae.eval()
     pipeline.image_encoder.eval()
     vae = pipeline.vae
     device = vae.device
-    
     # Convert videos to latent space
     pixel_values = batch["pixel_values"]
     bsz, num_frames = pixel_values.shape[:2]
@@ -438,6 +441,16 @@ def finetune_unet(pipeline, batch, use_offset_noise,
     latents = vae.encode(frames).latent_dist.mode()
     latents = rearrange(latents, '(b f) c h w-> b f c h w', b=bsz)
     latents = latents * vae.config.scaling_factor
+    if motion_mask:
+        mask = batch["mask"]
+        mask = mask.div(255).to(latents.device)
+        h, w = latents.shape[-2:]
+        mask = T.Resize((h, w), antialias=False)(mask)
+        mask[mask<0.5] = 0
+        mask[mask>=0.5] = 1
+        mask = rearrange(mask, 'b h w -> b 1 1 h w')
+        freeze = repeat(latents[:,0], 'b c h w -> b f c h w', f=num_frames)
+        latents = freeze * (1-mask)  + latents * mask
 
     # enocde image latent
     image = pixel_values[:,0]
@@ -449,7 +462,7 @@ def finetune_unet(pipeline, batch, use_offset_noise,
     images = _resize_with_antialiasing(pixel_values[:,0], (224, 224))
     images = (images + 1.0) / 2.0 # [-1, 1] -> [0, 1]
     images = pipeline.feature_extractor(
-        images=[images[i] for i in range(images.shape[0])],
+        images=images,
         do_normalize=True,
         do_center_crop=False,
         do_resize=False,
@@ -460,8 +473,8 @@ def finetune_unet(pipeline, batch, use_offset_noise,
     negative_image_embeddings = torch.zeros_like(image_embeddings)
 
     # Add noise to the latents according to the noise magnitude at each timestep
-    # (this is the forward diffusion process)
-    rnd_normal = torch.randn([bsz], device=device)
+    # (this is the forward diffusion process) #[bsz, f, c, h , w]
+    rnd_normal = torch.randn([bsz, 1, 1, 1, 1], device=device)
     sigma = (rnd_normal * P_std + P_mean).exp()
     c_skip = 1 / (sigma**2 + 1)
     c_out =  -sigma / (sigma**2 + 1) ** 0.5
@@ -472,6 +485,9 @@ def finetune_unet(pipeline, batch, use_offset_noise,
     noisy_latents = latents + torch.randn_like(latents) * sigma
     input_latents = c_in * noisy_latents
     input_latents = torch.cat([input_latents, image_latents], dim=2)
+    if motion_mask:
+        mask = repeat(mask, 'b 1 1 h w -> b f 1 h w', f=num_frames)
+        input_latents = torch.cat([mask, input_latents], dim=2)
 
     motion_bucket_id = 127
     fps = 7
@@ -484,10 +500,14 @@ def finetune_unet(pipeline, batch, use_offset_noise,
         encoder_hidden_states = (
             negative_image_embeddings if i==0 else image_embeddings
         )
-        model_pred = unet(input_latents, c_noise, encoder_hidden_states=encoder_hidden_states, 
+        model_pred = unet(input_latents, c_noise.reshape([bsz]), encoder_hidden_states=encoder_hidden_states, 
             added_time_ids=added_time_ids,).sample
         predict_x0 = c_out * model_pred + c_skip * noisy_latents 
-        loss = loss_weight * F.mse_loss(predict_x0, latents, reduction="mean")
+        loss = ((predict_x0 - latents)**2 * loss_weight).mean()
+        '''
+        if motion_mask:
+            loss += F.mse_loss(predict_x0*(1-mask), freeze*(1-mask))
+        ''' 
         losses.append(loss)
     loss = losses[0] if len(losses) == 1 else losses[0] + losses[1] 
     return loss
@@ -549,6 +569,7 @@ def main(
     lora_unet_dropout: float = 0.1,
     lora_text_dropout: float = 0.1,
     logger_type: str = 'tensorboard',
+    motion_mask=False,
     **kwargs
 ):
     *_, config = inspect.getargvalues(inspect.currentframe())
@@ -781,7 +802,7 @@ def main(
             with accelerator.accumulate(unet) ,accelerator.accumulate(text_encoder):
                 with accelerator.autocast():
                     loss = finetune_unet(pipeline, batch, use_offset_noise, 
-                        rescale_schedule, offset_noise_strength, unet)
+                        rescale_schedule, offset_noise_strength, unet, motion_mask)
                 device = loss.device 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(train_batch_size)).mean()
@@ -886,36 +907,50 @@ def eval(pipeline, vae_processor, validation_data, out_file, index, forward_t=25
     validation_data.height = round(height/scale/block_size)*block_size
     validation_data.width = round(width/scale/block_size)*block_size
 
-    # prepare inital latents
-    input_image = vae_processor.preprocess(pimg, validation_data.height, validation_data.width)
-    input_image = input_image.to(dtype).to(device)
-    input_image_latents = vae.encode(input_image).latent_dist.mode()
-    initial_latents, timesteps = DDPM_forward_timesteps(input_image_latents, forward_t, 
-        validation_data.num_frames, diffusion_scheduler) 
-    initial_latents = initial_latents/diffusion_scheduler.init_noise_sigma
-
     mask_path = validation_data.prompt_image.split('.')[0] + '_label.jpg'
     if os.path.exists(mask_path):
         mask = Image.open(mask_path)
         mask = mask.resize((validation_data.width, validation_data.height))
         np_mask = np.array(mask)
+        if len(np_mask.shape) == 3:
+            np_mask = np_mask[:,:,0]
         np_mask[np_mask!=0]=255
     else:
         np_mask = np.ones([validation_data.height, validation_data.width], dtype=np.uint8)*255
     out_mask_path = os.path.splitext(out_file)[0] + "_mask.jpg"
     Image.fromarray(np_mask).save(out_mask_path)
+    motion_mask = pipeline.unet.config.in_channels == 9
 
+    # prepare inital latents
+    initial_latents = None
     with torch.no_grad():
-        video_frames = pipeline(
-            #latents = initial_latents,
-            image=pimg,
-            width=validation_data.width,
-            height=validation_data.height,
-            num_frames=validation_data.num_frames,
-            num_inference_steps=validation_data.num_inference_steps,
-            decode_chunk_size=7,
-            motion_bucket_id=127,
-        ).frames[0]
+        if motion_mask:
+            h, w = validation_data.height//pipeline.vae_scale_factor, validation_data.width//pipeline.vae_scale_factor
+            initial_latents = torch.randn([1, validation_data.num_frames, 4, h, w], dtype=dtype, device=device)
+            mask = T.ToTensor()(np_mask).to(dtype).to(device)
+            mask = T.Resize([h, w], antialias=False)(mask)
+            video_frames = MaskStableVideoDiffusionPipeline.__call__(
+                pipeline,
+                image=pimg,
+                width=validation_data.width,
+                height=validation_data.height,
+                num_frames=validation_data.num_frames,
+                num_inference_steps=validation_data.num_inference_steps,
+                decode_chunk_size=7,
+                motion_bucket_id=127,
+                mask=mask
+            ).frames[0]
+        else:
+            video_frames = pipeline(
+                image=pimg,
+                width=validation_data.width,
+                height=validation_data.height,
+                num_frames=validation_data.num_frames,
+                num_inference_steps=validation_data.num_inference_steps,
+                decode_chunk_size=7,
+                motion_bucket_id=127,
+            ).frames[0]
+    
     if preview:
         imageio.mimwrite(out_file, video_frames, duration=175, loop=0)
         imageio.mimwrite(out_file.replace('.gif', '.mp4'), video_frames, fps=7)
@@ -924,36 +959,25 @@ def eval(pipeline, vae_processor, validation_data, out_file, index, forward_t=25
 def main_eval(
     pretrained_model_path: str,
     validation_data: Dict,
-    enable_xformers_memory_efficient_attention: bool = True,
-    enable_torch_2_attn: bool = False,
     seed: Optional[int] = None,
-    val_file = None,
+    eval_file = None,
     **kwargs
 ):
     if seed is not None:
         set_seed(seed)
     # Load scheduler, tokenizer and models.
-    pipeline, tokenizer, feature_extractor, train_scheduler, vae_processor, text_encoder, vae, unet = load_primary_models(pretrained_model_path)
-    # Freeze any necessary models
-    freeze_models([vae, text_encoder, unet])
-    
-    # Enable xformers if available
-    handle_memory_attention(enable_xformers_memory_efficient_attention, enable_torch_2_attn, unet)
-    # For mixed precision training we cast the text_encoder and vae weights to half-precision
-    # as these models are only used for inference, keeping weights in full precision is not required.
-    weight_dtype = torch.half
+    pipeline, tokenizer, feature_extractor, train_scheduler, vae_processor, text_encoder, vae, unet = load_primary_models(pretrained_model_path, eval=True)
     device = torch.device("cuda")
-    # Move text encoders, and VAE to GPU
-    models_to_cast = [text_encoder, unet, vae]
-    cast_to_gpu_and_type(models_to_cast, device, weight_dtype)
-    if val_file is not None:
-        val_list = json.load(open(val_file))[:3]
+    pipeline.to(device)
+
+    if eval_file is not None:
+        eval_list = json.load(open(eval_file))
     else:
-        val_list = [[validation_data.prompt_image, validation_data.prompt]]
+        eval_list = [[validation_data.prompt_image, validation_data.prompt]]
 
     output_dir = "output/svd_out"
-    iters = 6
-    for example in val_list:
+    iters = 5
+    for example in eval_list:
         for t in range(iters):
             name, prompt = example
             out_file_dir = f"{output_dir}/{name.split('.')[0]}"

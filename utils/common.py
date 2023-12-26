@@ -7,6 +7,7 @@ import numpy as np
 import torchvision.transforms as T
 from einops import rearrange, repeat
 import imageio
+import sys
 
 def DDPM_forward(x0, step, num_frames, scheduler):
     '''larger step -> smaller t -> smaller alphas[t:] -> smaller xt -> smaller x0'''
@@ -55,10 +56,14 @@ def DDPM_forward_mask(x0, step, num_frames, scheduler, mask):
     initial = freeze_xt * (1-mask) + move_xt * mask
     return initial, timesteps
 
-def read_video(video_path, frame_number):
+def read_video(video_path, frame_number=-1):
     # Open the video file
     cap = cv2.VideoCapture(video_path)
-
+    count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) 
+    if frame_number == -1:
+        frame_number = count
+    else:
+        frame_number = min(frame_number, count)
     frames = []
     for i in range(frame_number):
         ret, ref_frame = cap.read()
@@ -321,25 +326,31 @@ def calculate_motion_score(frame_imgs, calculate_edges=False, color="RGB") -> fl
     return round(score/(len(frame_imgs)-1) * 10)
 
 if __name__ == "__main__":
+    
     # Example usage
     video_paths = [
+        "/data/video/animate2/Bleach.Sennen.Kessen.Hen.S01E01.2022.1080p.WEB-DL.x264.AAC-DDHDTV-Scene-002.mp4",
+        "/data/video/animate2/Evangelion.3.0.1.01.Thrice.Upon.A.Time.2021.BLURAY.720p.BluRay.x264.AAC-[YTS.MX]-Scene-0780.mp4",
+        "/data/video/animate2/[GM-Team][国漫][永生 第2季][IMMORTALITY Ⅱ][2023][09][AVC][GB][1080P]-Scene-180.mp4",
+        "/data/video/animate2/[orion origin] Legend of the Galactic Heroes Die Neue These [07] [WebRip 1080p] [H265 AAC] [GB]-Scene-048.mp4",
+        "/data/video/MSRVTT/videos/all/video33.mp4",
         "/webvid/webvid/data/videos/000001_000050/1066692580.mp4",
         "/webvid/webvid/data/videos/000001_000050/1066685533.mp4",
         "/webvid/webvid/data/videos/000001_000050/1066685548.mp4",
         "/webvid/webvid/data/videos/000001_000050/1066676380.mp4",
         "/webvid/webvid/data/videos/000001_000050/1066676377.mp4",
     ]
-    for i, video_path in enumerate(video_paths[:2]):
-        frames = read_video(video_path, 64)[::4]
-        test_mask=False
-        test_motion=False
-        to_gif=True
-        if test_mask:
+    for i, video_path in enumerate(video_paths[:5]):
+        frames = read_video(video_path, 200)[::3]
+        if sys.argv[1] == 'test_mask':
             mask = get_moved_area_mask(frames)
             Image.fromarray(mask).save(f"output/mask/{i}.jpg")
             imageio.mimwrite(f"output/mask/{i}.gif", frames, duration=125, loop=0)
-        elif test_motion:
-            for i in range(1, 10):
-                print(calculate_motion_score(frames[::i][:8], calculate_edges=False, color="BGR"))
-        elif to_gif:
+        elif sys.argv[1] == 'test_motion':
+            for r in range(0, len(frames), 16):
+                video_frames = frames[r:r+16]
+                video_frames = [cv2.resize(f, (512, 512)) for f in video_frames]
+                score = calculate_motion_score(video_frames, calculate_edges=False, color="BGR")
+                imageio.mimwrite(f"output/example_video/{i}_{r}_{score}.mp4", video_frames, fps=8)
+        elif sys.argv[1] == 'to_gif':
             imageio.mimwrite(f"output/example_video/{i}.gif", frames, duration=125, loop=0)
