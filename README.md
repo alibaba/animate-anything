@@ -106,7 +106,7 @@ You can automatically caption the videos using the [Video-BLIP2-Preprocessor Scr
 
 ### Configuration
 
-The configuration uses a YAML config borrowed from [Tune-A-Video](https://github.com/showlab/Tune-A-Video) reposotories. 
+The configuration uses a YAML config borrowed from [Tune-A-Video](https://github.com/showlab/Tune-A-Video) repositories. 
 
 All configuration details are placed in `example/train_mask_motion.yaml`. Each parameter has a definition for what it does.
 
