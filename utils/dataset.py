@@ -89,16 +89,21 @@ def get_text_prompt(
         return fallback_prompt
 
     
-def get_video_frames(vr, start_idx, sample_rate=1, max_frames=24):
+def get_frame_batch(max_frames, sample_fps, vr, transform):
+    native_fps = vr.get_avg_fps()
     max_range = len(vr)
-    frame_number = sorted((0, start_idx, max_range))[1]
-
-    frame_range = range(frame_number, max_range, sample_rate)
+    frame_step = max(1, round(native_fps / sample_fps))
+    frame_range = range(0, max_range, frame_step)
     if len(frame_range) < max_frames:
         frame_range =  np.linspace(frame_number, max_range-1, max_frames).astype(int)
-    start = random.randint(0, len(frame_range) - max_frames)
+    #start = random.randint(0, len(frame_range) - max_frames)
+    start = len(frame_range) - max_frames
     frame_range_indices = list(frame_range)[start:start+max_frames]
-    return frame_range_indices
+    frames = vr.get_batch(frame_range_indices)
+    video = rearrange(frames, "f h w c -> f c h w")
+    video = transform(video)
+    return video
+
 
 def process_video(vid_path, use_bucketing, w, h, get_frame_buckets, get_frame_batch):
     if use_bucketing:
@@ -127,8 +132,7 @@ class VideoBLIPDataset(Dataset):
             vid_data_key: str = "video_path",
             preprocessed: bool = False,
             use_bucketing: bool = False,
-            return_mask: bool=False,
-            return_motion: bool=False,
+            cache_latents: = False,
             motion_threshold = 50,
             **kwargs
     ):
@@ -139,8 +143,7 @@ class VideoBLIPDataset(Dataset):
         
         self.vid_data_key = vid_data_key
         self.train_data = self.load_from_json(json_path, json_data)
-        self.return_mask = return_mask
-        self.return_motion = return_motion
+        self.cache_latents = cache_latents
         self.motion_threshold = motion_threshold
         self.width = width
         self.height = height
@@ -149,8 +152,9 @@ class VideoBLIPDataset(Dataset):
         self.sample_start_idx = sample_start_idx
         self.fps = fps
         self.transform = T.Compose([
-            T.RandomResizedCrop(size=(height, width), scale=(0.8, 1.0), 
-                ratio=(width/height, width/height), antialias=False)
+            #T.RandomResizedCrop(size=(height, width), scale=(0.8, 1.0), ratio=(width/height, width/height), antialias=False)
+            T.Resize(min(height, width), antialias=False),
+            T.CenterCrop([height, width])
         ])
 
     def build_json(self, json_data):
@@ -197,30 +201,7 @@ class VideoBLIPDataset(Dataset):
 
         return resize
 
-    def get_frame_batch(self, vr, offset=None,resize=None):
-        native_fps = vr.get_avg_fps()
-        if type(self.fps) != int:
-            if offset:
-                sample_fps = self.fps[0]+offset
-            else:
-                sample_fps = random.randint(self.fps[0], self.fps[1])
-        else:
-            sample_fps = self.fps
-
-        frame_step = max(1, round(native_fps / sample_fps))
-        frame_range = get_video_frames(vr, self.sample_start_idx, frame_step, self.n_sample_frames)
-        frames = vr.get_batch(frame_range)
-        video = rearrange(frames, "f h w c -> f c h w")
-
-        if resize is not None: 
-            video = resize(video)
-        else:
-            video = self.transform(video)
-
-        return video
-
     def train_data_batch(self, index):
-        
         vid_data = self.train_data[index]
         # Get video prompt
         prompt = vid_data['prompt']
@@ -232,11 +213,24 @@ class VideoBLIPDataset(Dataset):
             clip_path = vid_data[self.vid_data_key]
             # Get the frame of the current index.
             self.sample_start_idx = vid_data['frame_index']
+        cache_path = os.path.splitext(clip_path)[0] + '.pt'
+        if self.cache_latents and os.path.exists(cache_path):
+            return torch.load(cache_path, map_location='cpu')
 
         vr = decord.VideoReader(clip_path)
-        video = self.get_frame_batch(vr)
+        video = get_frame_batch(self.n_sample_frames, self.fps, vr, self.transform)
         prompt_ids = get_prompt_ids(prompt, self.tokenizer)
-        return video, prompt, prompt_ids
+        example = {
+            "pixel_values": normalize_input(video),
+            "prompt_ids": prompt_ids,
+            "text_prompt": prompt,
+            'dataset': self.__getname__()
+            'cache_path': cache_path,
+        }
+        mask = get_moved_area_mask(video.permute([0,2,3,1]).numpy())
+        example['mask'] = mask
+        example['motion'] = calculate_motion_score(video.permute([0,2,3,1]).numpy())
+        return example
         
 
     @staticmethod
@@ -249,32 +243,9 @@ class VideoBLIPDataset(Dataset):
             return 0
 
     def __getitem__(self, index):
-        
-        # Initialize variables
-        video = None
-        prompt = None
-        prompt_ids = None
-        mask = None
-
-        # Use default JSON training
-        if self.train_data is not None:
-            video, prompt, prompt_ids = self.train_data_batch(index)
-        
-        example = {
-            "pixel_values": normalize_input(video),
-            "prompt_ids": prompt_ids,
-            "text_prompt": prompt,
-            'dataset': self.__getname__()
-        }
-
-        if self.return_mask:
-            mask = get_moved_area_mask(video.permute([0,2,3,1]).numpy())
-            example['mask'] = mask
-
-        if self.return_motion:
-            example['motion'] = calculate_motion_score(video.permute([0,2,3,1]).numpy())
-            if example['motion'] < self.motion_threshold:
-                return self.__getitem__(random.randint(0, len(self)-1))
+        example = self.train_data_batch(index)
+        if example['motion'] < self.motion_threshold:
+            return self.__getitem__(random.randint(0, len(self)-1))
         return example
 
 
@@ -575,8 +546,7 @@ class VideoJsonDataset(Dataset):
         video_json: str = "",
         fallback_prompt: str = "",
         use_bucketing: bool = False,
-        return_mask = False,
-        return_motion = False,
+        cache_latents = False,
         motion_threshold = 50,
         **kwargs
     ):
@@ -592,12 +562,12 @@ class VideoJsonDataset(Dataset):
 
         self.n_sample_frames = n_sample_frames
         self.fps = fps
-        self.return_mask = return_mask
-        self.return_motion = return_motion
+        self.cache_latents = cache_latents
         self.motion_threshold = motion_threshold
         self.transform = T.Compose([
-            T.RandomResizedCrop(size=(height, width), scale=(0.8, 1.0), 
-                ratio=(width/height, width/height), antialias=False)
+            #T.RandomResizedCrop(size=(height, width), scale=(0.8, 1.0), ratio=(width/height, width/height), antialias=False),
+            T.Resize(min(height, width), antialias=False),
+            T.CenterCrop([height, width])
         ])
 
 
@@ -608,37 +578,7 @@ class VideoJsonDataset(Dataset):
 
         return resize
 
-    def get_frame_batch(self, vr, offset=None, resize=None):
-        n_sample_frames = self.n_sample_frames
-        native_fps = vr.get_avg_fps()
-        
-        if type(self.fps) != int:
-            if offset:
-                sample_fps = self.fps[0]+offset
-            else:
-                sample_fps = random.randint(self.fps[0], self.fps[1])
-        else:
-            sample_fps = self.fps
-        every_nth_frame = max(1, round(native_fps / sample_fps))
-        every_nth_frame = min(len(vr), every_nth_frame)
-        
-        effective_length = len(vr) // every_nth_frame
-        if effective_length < n_sample_frames:
-            n_sample_frames = effective_length
-            raise RuntimeError("not enough frames")
-
-        effective_idx = random.randint(0, (effective_length - n_sample_frames))
-        idxs = every_nth_frame * np.arange(effective_idx, effective_idx + n_sample_frames)
-
-        video = vr.get_batch(idxs)
-        video = rearrange(video, "f h w c -> f c h w")
-
-        if resize is not None: 
-            video = resize(video)
-        else:
-            video  = self.transform(video)
-        return video
-        
+       
     @staticmethod
     def __getname__(): return 'video_json'
 
@@ -650,23 +590,31 @@ class VideoJsonDataset(Dataset):
         try:
             item = self.video_files[index]
             video_path = os.path.join(self.video_dir, item['video'])
+            cache_path = os.path.splitext(video_path)[0] + '.pt'
+            if self.cache_latents and os.path.exists(cache_path):
+                return torch.load(cache_path, map_location='cpu')
+
             prompt = item['caption']
             if self.fallback_prompt == "<no_text>":
                 prompt = ""
             vr = decord.VideoReader(video_path)
-            video = self.get_frame_batch(vr)
+            video = get_frame_batch(self.n_sample_frames, self.fps, vr, self.transform)
         except Exception as err:
             print("read video error", err, video_path)
             return self.__getitem__(index+1)
         prompt_ids = get_prompt_ids(prompt, self.tokenizer)
-        example = {"pixel_values": normalize_input(video), "prompt_ids": prompt_ids, 
-            "text_prompt": prompt, 'dataset': self.__getname__()}
-        if self.return_mask:
-            mask = get_moved_area_mask(video.permute([0,2,3,1]).numpy())
-        if self.return_motion:
-            example['motion'] = calculate_motion_score(video.permute([0,2,3,1]).numpy())
-            if example['motion'] < self.motion_threshold:
-                return self.__getitem__(random.randint(0, len(self)-1))
+
+        example = {
+            "pixel_values": normalize_input(video), 
+            "prompt_ids": prompt_ids, 
+            "text_prompt": prompt, 
+            'cache_path': cache_path,
+            'dataset': self.__getname__()
+        }
+        mask = get_moved_area_mask(video.permute([0,2,3,1]).numpy())
+        example['motion'] = calculate_motion_score(video.permute([0,2,3,1]).numpy())
+        if example['motion'] < self.motion_threshold:
+            return self.__getitem__(random.randint(0, len(self)-1))
         return example
 
 class CachedDataset(Dataset):

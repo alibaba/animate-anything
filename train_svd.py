@@ -146,6 +146,72 @@ def convert_svd(pretrained_model_path, out_path):
         pretrained_model_path, unet=unet)
     new_pipeline.save_pretrained(out_path)
 
+def handle_cache_latents(
+        should_cache, 
+        output_dir, 
+        train_dataloader, 
+        train_batch_size, 
+        pipeline,
+        device,
+        cached_latent_dir=None,
+        shuffle=False,
+    ):
+
+    # Cache latents by storing them in VRAM. 
+    # Speeds up training and saves memory by not encoding during the train loop.
+    if not should_cache: return None
+    pipeline.to(device, dtype=torch.half) 
+    cached_latent_dir = (
+        os.path.abspath(cached_latent_dir) if cached_latent_dir is not None else None 
+        )
+
+    if cached_latent_dir is None:
+        cache_save_dir = f"{output_dir}/cached_latents"
+        os.makedirs(cache_save_dir, exist_ok=True)
+
+        for i, batch in enumerate(tqdm(train_dataloader, desc="Caching Latents.")):
+            save_name = f"cached_{i}"
+            full_out_path =  f"{cache_save_dir}/{save_name}.pt"
+
+            pixel_values = batch['pixel_values'].to(device)
+            bsz, num_frames = pixel_values.shape[:2]
+            frames = rearrange(pixel_values, 'b f c h w-> (b f) c h w').to(torch.half)
+            latents = pipeline.vae.encode(frames).latent_dist.mode()
+            latents = rearrange(latents, '(b f) c h w-> b f c h w', b=bsz)
+            latents = latents * pipeline.vae.config.scaling_factor
+            batch['latent'] = latents
+            # vae image to clip image
+            images = _resize_with_antialiasing(pixel_values[:,0], (224, 224)).to(torch.half)
+            images = (images + 1.0) / 2.0 # [-1, 1] -> [0, 1]
+            images = pipeline.feature_extractor(
+                images=images,
+                do_normalize=True,
+                do_center_crop=False,
+                do_resize=False,
+                do_rescale=False,
+                return_tensors="pt",
+            ).pixel_values 
+
+            image_embeddings = pipeline._encode_image(images, device, 1, False)
+            batch['image_embeddings'] = image_embeddings
+
+            for k, v in batch.items(): batch[k] = v[0]
+            torch.save(batch, full_out_path)
+            del pixel_values
+            del batch
+
+            # We do this to avoid fragmentation from casting latents between devices.
+            torch.cuda.empty_cache()
+    else:
+        cache_save_dir = cached_latent_dir
+        
+
+    return torch.utils.data.DataLoader(
+        CachedDataset(cache_dir=cache_save_dir), 
+        batch_size=train_batch_size, 
+        shuffle=shuffle,
+        num_workers=0
+    ) 
 
 def _set_gradient_checkpointing(self, value=False):
     self.gradient_checkpointing = value
@@ -155,7 +221,10 @@ def _set_gradient_checkpointing(self, value=False):
                 
 def unet_and_text_g_c(unet, text_encoder, unet_enable, text_enable):
     _set_gradient_checkpointing(unet, value=unet_enable)
-    text_encoder._set_gradient_checkpointing(text_enable)
+    if text_enable:
+        text_encoder.gradient_checkpointing_enable()
+    else:
+        text_encoder.gradient_checkpointing_disable()
 
 def freeze_models(models_to_freeze):
     for model in models_to_freeze:
@@ -702,13 +771,27 @@ def main(
         shuffle=shuffle
     )
 
+    # Latents caching
+    cached_data_loader = handle_cache_latents(
+        cache_latents, 
+        output_dir,
+        train_dataloader, 
+        train_batch_size, 
+        pipeline,
+        accelerator.device,
+        cached_latent_dir
+    ) 
+
+    if cached_data_loader is not None: 
+        train_dataloader = cached_data_loader
+        text_encoder.to("cpu")
+
     # Prepare everything with our `accelerator`.
-    unet, optimizer, train_dataloader, lr_scheduler, text_encoder = accelerator.prepare(
+    unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         unet, 
         optimizer, 
         train_dataloader, 
         lr_scheduler, 
-        text_encoder
     )
 
     # Use Gradient Checkpointing if enabled.
@@ -724,8 +807,7 @@ def main(
     weight_dtype = is_mixed_precision(accelerator)
 
     # Move text encoders, and VAE to GPU
-    models_to_cast = [text_encoder, vae]
-    cast_to_gpu_and_type(models_to_cast, accelerator.device, weight_dtype)
+    cast_to_gpu_and_type([vae], accelerator.device, weight_dtype)
     
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / gradient_accumulation_steps)

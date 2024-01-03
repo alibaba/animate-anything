@@ -52,7 +52,7 @@ from utils.lora_handler import LoraHandler, LORA_VERSIONS
 from utils.common import read_mask, generate_random_mask, slerp, calculate_motion_score, \
     read_video, calculate_motion_precision, calculate_latent_motion_score, \
     DDPM_forward, DDPM_forward_timesteps, DDPM_forward_mask, motion_mask_loss, \
-    generate_center_mask
+    generate_center_mask, tensor_to_vae_latent
 
 already_printed_trainables = False
 
@@ -357,16 +357,6 @@ def handle_trainable_modules(model, trainable_modules, not_trainable_modules=[],
     if unfrozen_params > 0 and not already_printed_trainables:
         already_printed_trainables = True 
         print(f"{unfrozen_params} params have been unfrozen for training.")
-
-def tensor_to_vae_latent(t, vae):
-    video_length = t.shape[1]
-
-    t = rearrange(t, "b f c h w -> (b f) c h w")
-    latents = vae.encode(t).latent_dist.sample()
-    latents = rearrange(latents, "(b f) c h w -> b c f h w", f=video_length)
-    latents = latents * 0.18215
-
-    return latents
 
 def sample_noise(latents, noise_strength, use_offset_noise=False):
     b ,c, f, *_ = latents.shape
