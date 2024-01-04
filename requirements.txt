@@ -14,4 +14,4 @@ pydantic
 compel
 easydict
 rotary_embedding_torch
-imageio
+imageio[ffmpeg]
