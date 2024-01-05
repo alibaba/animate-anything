@@ -1,4 +1,4 @@
-# AnimateAnyghing: Fine Grained Open Domain Image Animation with Motion Guidance
+# AnimateAnything: Fine Grained Open Domain Image Animation with Motion Guidance
 Project page: https://animationai.github.io/AnimateAnything/
 
 Arxiv Link: https://arxiv.org/abs/2311.12886
