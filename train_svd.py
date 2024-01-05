@@ -901,6 +901,8 @@ def eval(pipeline, vae_processor, validation_data, out_file, index, forward_t=25
 
     prompt = validation_data.prompt
     pimg = Image.open(validation_data.prompt_image)
+    if pimg.mode == "RGBA":
+        pimg = pimg.convert("RGB")
     width, height = pimg.size
     scale = math.sqrt(width*height / (validation_data.height*validation_data.width))
     block_size=64
