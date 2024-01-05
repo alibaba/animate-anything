@@ -9,6 +9,16 @@ from einops import rearrange, repeat
 import imageio
 import sys
 
+def tensor_to_vae_latent(t, vae):
+    video_length = t.shape[1]
+
+    t = rearrange(t, "b f c h w -> (b f) c h w")
+    latents = vae.encode(t).latent_dist.sample()
+    latents = rearrange(latents, "(b f) c h w -> b c f h w", f=video_length)
+    latents = latents * 0.18215
+
+    return latents
+
 def DDPM_forward(x0, step, num_frames, scheduler):
     '''larger step -> smaller t -> smaller alphas[t:] -> smaller xt -> smaller x0'''
     device = x0.device
