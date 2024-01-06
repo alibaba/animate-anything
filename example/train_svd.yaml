@@ -1,6 +1,6 @@
 # Pretrained diffusers model path.
 #pretrained_model_path: "output/latent/train_mask_motion" #https://huggingface.co/damo-vilab/text-to-video-ms-1.7b/tree/main
-pretrained_model_path: "/webvid/llm/stable-video-diffusion-img2vid"
+pretrained_model_path: "/root/sspaas-fs/stable-video-diffusion-img2vid-xt"
 
 
 motion_mask: False
@@ -113,8 +113,8 @@ lora_rank: 16
 train_data:
 
   # The width and height in which you want your training data to be resized to.
-  width:  512
-  height: 512
+  width:  1024
+  height: 576
 
   # This will find the closest aspect ratio to your input width and height. 
   # For example, 512x512 width and height with a video of resolution 1280x720 will be resized to 512x256
@@ -155,8 +155,8 @@ train_data:
   image_dir: '/vlp/datasets/images/coco'
   image_json: '/vlp/datasets/images/coco/coco_karpathy_train.json'
 
-  video_dir: '/webvid/webvid/data/videos'
-  video_json: '/webvid/webvid/data/40K.json'
+  video_dir: '/root/sspaas-fs/train_data/resize_1024_576'
+  video_json: '/root/sspaas-fs/train_data/resize_1024_576/40K.json'
   # The prompt for all image files. Leave blank to use caption files (.txt) 
   single_img_prompt: ""
 
@@ -176,8 +176,8 @@ validation_data:
   num_frames: 14
 
   # Height and width of validation sample.
-  width: 512
-  height: 512
+  width: 1024
+  height: 576
 
   # Number of inference steps when generating the video.
   num_inference_steps: 25
