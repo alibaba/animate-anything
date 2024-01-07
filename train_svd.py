@@ -938,8 +938,9 @@ def eval(pipeline, vae_processor, validation_data, out_file, index, forward_t=25
                 height=validation_data.height,
                 num_frames=validation_data.num_frames,
                 num_inference_steps=validation_data.num_inference_steps,
-                decode_chunk_size=7,
-                motion_bucket_id=127,
+                decode_chunk_size=validation_data.decode_chunk_size,
+                fps=validation_data.fps,
+                motion_bucket_id=validation_data.motion_bucket_id,
                 mask=mask
             ).frames[0]
         else:
@@ -949,8 +950,9 @@ def eval(pipeline, vae_processor, validation_data, out_file, index, forward_t=25
                 height=validation_data.height,
                 num_frames=validation_data.num_frames,
                 num_inference_steps=validation_data.num_inference_steps,
-                decode_chunk_size=7,
-                motion_bucket_id=127,
+                fps=validation_data.fps,
+                decode_chunk_size=validation_data.decode_chunk_size,
+                motion_bucket_id=validation_data.motion_bucket_id,
             ).frames[0]
     
     if preview:
