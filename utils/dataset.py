@@ -188,6 +188,8 @@ class VideoBLIPDataset(Dataset):
                 return self.build_json(json_data)
 
         except:
+            import traceback
+            traceback.print_exc()
             self.train_data = []
             print("Non-existant JSON path. Skipping.")
             
