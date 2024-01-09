@@ -132,7 +132,7 @@ class VideoBLIPDataset(Dataset):
             vid_data_key: str = "video_path",
             preprocessed: bool = False,
             use_bucketing: bool = False,
-            cache_latents: = False,
+            cache_latents: bool = False,
             motion_threshold = 50,
             **kwargs
     ):
@@ -226,7 +226,7 @@ class VideoBLIPDataset(Dataset):
             "pixel_values": normalize_input(video),
             "prompt_ids": prompt_ids,
             "text_prompt": prompt,
-            'dataset': self.__getname__()
+            'dataset': self.__getname__(),
             'cache_path': cache_path,
         }
         mask = get_moved_area_mask(video.permute([0,2,3,1]).numpy())
