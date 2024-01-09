@@ -184,6 +184,17 @@ validation_data:
   # CFG scale
   guidance_scale: 9
 
+  # fps
+  fps: 7
+
+  # The motion bucket ID. Used as conditioning for the generation. The higher the number the more motion will be in the video.
+  motion_bucket_id: 127
+
+  # The number of frames to decode at a time. The higher the chunk size, the higher the temporal consistency between frames,
+  # but also the higher the memory consumption. By default, the decoder will decode all frames at once for maximal quality.
+  # Reduce `decode_chunk_size` to reduce memory usage.
+  decode_chunk_size: 7
+
 # Learning rate for AdamW
 learning_rate: 2e-5
 
