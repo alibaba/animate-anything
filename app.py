@@ -18,7 +18,7 @@ from einops import rearrange, repeat
 import imageio
 
 from models.pipeline import LatentToVideoPipeline
-from utils.common import tensor_to_vae_latent, DDPM_forward_timesteps
+from utils.common import tensor_to_vae_latent, DDPM_forward
 
 css = """
 .toolbutton {
@@ -82,18 +82,20 @@ class AnimateController:
         np_mask[np_mask!=0] = 255
         if np_mask.sum() == 0:
             np_mask[:] = 255
-        #np_mask = np.ones([height, width], dtype=np.uint8)*255
-
-
+        save_sample_path = os.path.join(
+            self.output_dir, f"{self.sample_idx}.mp4")
+        out_mask_path = os.path.splitext(save_sample_path)[0] + "_mask.jpg"
+        Image.fromarray(np_mask).save(out_mask_path)
+ 
         b, c, _, h, w = input_image_latents.shape
-        initial_latents, timesteps = DDPM_forward_timesteps(input_image_latents, 
+        initial_latents, timesteps = DDPM_forward(input_image_latents, 
             sample_step_slider, validation_data.num_frames, diffusion_scheduler) 
         mask = T.ToTensor()(np_mask).to(dtype).to(device)
         b, c, f, h, w = initial_latents.shape
         mask = T.Resize([h, w], antialias=False)(mask)
         mask = rearrange(mask, 'b h w -> b 1 1 h w')
-
-        motion_strength = motion_scale
+        motion_strength = motion_scale * mask.mean().item()
+        print(f"outfile {save_sample_path}, prompt {prompt_textbox}, motion_strength {motion_strength}")
         with torch.no_grad():
             video_frames, video_latents = self.pipeline(
                 prompt=prompt_textbox,
@@ -110,8 +112,6 @@ class AnimateController:
                 timesteps=timesteps,
             )
 
-        save_sample_path = os.path.join(
-            self.output_dir, f"{self.sample_idx}.mp4")
         imageio.mimwrite(save_sample_path, video_frames, fps=8)
         self.sample_idx += 1
         return save_sample_path
@@ -121,42 +121,23 @@ def ui(controller):
     with gr.Blocks(css=css) as demo:
 
         gr.HTML(
-            "<div align='center'><font size='7'> <img src=\"file/example/barbie2.jpg\" style=\"height: 72px;\"/ >Animate Anything</font></div>"
+            "<div align='center'><font size='7'>Animate Anything</font></div>"
         )
         with gr.Row():
             gr.Markdown(
                 "<div align='center'><font size='5'><a href='https://animationai.github.io/AnimateAnything'>Project Page</a> &ensp;"  # noqa
                 "<a href='https://arxiv.org/abs/2311.12886'>Paper</a> &ensp;"
                 "<a href='https://github.com/alibaba/animate-anything'>Code</a> &ensp;"  # noqa
+                "<h3>Instructions: 1. Upload image 2. Draw mask on image using draw button. 3. Write prompt. 4.Click generate button. If it is not response, please click again.</h3>"
             )
 
         with gr.Row(equal_height=False):
             with gr.Column():
                 with gr.Row():
                     init_img = gr.ImageMask(label='Input Image', brush=gr.Brush(default_size=100))
-                style_dropdown = gr.Dropdown(label='Style', choices=['384', '512'], value='512')
+                style_dropdown = gr.Dropdown(label='Style', choices=['384', '512'])
                 with gr.Row():
-                    prompt_textbox = gr.Textbox(label="Prompt", lines=1)
-                    gift_button = gr.Button(
-                        value='🎁', elem_classes='toolbutton'
-                    )
-
-                def append_gift(prompt):
-                    rand = random.randint(0, 2)
-                    if rand == 1:
-                        prompt = prompt + 'wearing santa hats'
-                    elif rand == 2:
-                        prompt = prompt + 'lift a Christmas gift'
-                    else:
-                        prompt = prompt + 'in Christmas suit, lift a Christmas gift'
-                    gr.Info('Merry Christmas! Add magic to your prompt!')
-                    return prompt
-
-                gift_button.click(
-                    fn=append_gift,
-                    inputs=[prompt_textbox],
-                    outputs=[prompt_textbox],
-                )
+                    prompt_textbox = gr.Textbox(label="Prompt", value='moving', lines=1)
 
                 motion_scale_silder = gr.Slider(
                     label='Motion Strength (Larger value means larger motion but less identity consistency)',
@@ -170,7 +151,7 @@ def ui(controller):
                             label="Sampling steps", value=25, minimum=10, maximum=100, step=1)
 
                     cfg_scale_slider = gr.Slider(
-                        label="CFG Scale", value=7.5, minimum=0, maximum=20)
+                        label="CFG Scale", value=9, minimum=0, maximum=20)
 
                     with gr.Row():
                         seed_textbox = gr.Textbox(label="Seed", value=-1)
@@ -210,7 +191,6 @@ def ui(controller):
                     init_img,
                     result_video,
                     prompt_textbox,
-                    negative_prompt_textbox,
                     style_dropdown,
                     motion_scale_silder,
                 ],
@@ -221,13 +201,8 @@ def ui(controller):
         )
         create_example(
             [
-                [
-                    'example/girl5.jpg',
-                    'docs/girl5.mp4',
-                    'a girl is smiling',
-                    '3d_cartoon',
-                    2,
-                ],
+                [ 'example/pig0.jpg', 'docs/pig0.mp4', 'pigs are talking', '512', 3],
+                [ 'example/barbie2.jpg', 'docs/barbie2.mp4', 'a girl is talking', '512', 4],
             ],
 
         )

@@ -20,17 +20,12 @@ def tensor_to_vae_latent(t, vae):
     return latents
 
 def DDPM_forward(x0, step, num_frames, scheduler):
-    '''larger step -> smaller t -> smaller alphas[t:] -> smaller xt -> smaller x0'''
     device = x0.device
-    t = scheduler.timesteps[step]
-    eps = torch.randn(x0.shape, dtype=x0.dtype, device=device)
-    alpha_vec = torch.prod(scheduler.alphas[:t])
-    xt = torch.sqrt(alpha_vec) * x0 + torch.sqrt(1-alpha_vec) * eps
-    xt = repeat(xt, 'b c 1 h w -> b c f h w', f = num_frames)
+    t = scheduler.timesteps[-1]
+    xt = repeat(x0, 'b c 1 h w -> b c f h w', f = num_frames)
 
-    eps = torch.randn(xt.shape, dtype=xt.dtype, device=device)
+    eps = torch.randn_like(xt)
     alpha_vec = torch.prod(scheduler.alphas[t:])
-    #alpha_vec = torch.tensor(0.9).to(device)
     xt = torch.sqrt(alpha_vec) * xt + torch.sqrt(1-alpha_vec) * eps
     return xt, None
 
