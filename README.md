@@ -69,7 +69,7 @@ The model output low res videos, you can use video super resolution model to out
 
 ```bash
 git clone https://github.com/bilibili/ailab.git
-cd alilab
+cd ailab/Real-CUGAN
 python inference_video.py
 ```
 
