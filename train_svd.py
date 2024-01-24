@@ -807,7 +807,8 @@ def main(
     weight_dtype = is_mixed_precision(accelerator)
 
     # Move text encoders, and VAE to GPU
-    cast_to_gpu_and_type([vae], accelerator.device, weight_dtype)
+    models_to_cast = [text_encoder, vae]
+    cast_to_gpu_and_type(models_to_cast, accelerator.device, weight_dtype)
     
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / gradient_accumulation_steps)
