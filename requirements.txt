@@ -16,3 +16,4 @@ easydict
 rotary_embedding_torch
 imageio[ffmpeg]
 gradio
+httpx[socks]
