@@ -55,7 +55,7 @@ class AnimateController:
         progress=gr.Progress(),
     ):
 
-        if seed_textbox != -1 and seed_textbox != "":
+        if seed_textbox != "-1" and seed_textbox != "":
             torch.manual_seed(int(seed_textbox))
         else:
             torch.seed()
