@@ -613,7 +613,7 @@ class VideoJsonDataset(Dataset):
             'cache_path': cache_path,
             'dataset': self.__getname__()
         }
-        mask = get_moved_area_mask(video.permute([0,2,3,1]).numpy())
+        example['mask'] = get_moved_area_mask(video.permute([0,2,3,1]).numpy())
         example['motion'] = calculate_motion_score(video.permute([0,2,3,1]).numpy())
         if example['motion'] < self.motion_threshold:
             return self.__getitem__(random.randint(0, len(self)-1))
