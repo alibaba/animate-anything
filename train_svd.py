@@ -1039,8 +1039,8 @@ def eval(pipeline, vae_processor, validation_data, out_file, index, forward_t=25
             ).frames[0]
     
     if preview:
-        imageio.mimwrite(out_file, video_frames, duration=175, loop=0)
-        imageio.mimwrite(out_file.replace('.gif', '.mp4'), video_frames, fps=7)
+        imageio.mimwrite(out_file, video_frames, fps=validation_data.fps, loop=0)
+        imageio.mimwrite(out_file.replace('.gif', '.mp4'), video_frames, fps=validation_data.fps)
     return 0
 
 def main_eval(

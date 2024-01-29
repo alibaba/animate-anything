@@ -118,7 +118,7 @@ class AnimateController:
 
         save_sample_path = os.path.join(
             self.output_dir, f"{self.sample_idx}.mp4")
-        imageio.mimwrite(save_sample_path, video_frames, fps=7)
+        imageio.mimwrite(save_sample_path, video_frames, fps=validation_data.fps)
         self.sample_idx += 1
         return save_sample_path
 
