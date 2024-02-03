@@ -213,14 +213,11 @@ def handle_cache_latents(
         num_workers=0
     ) 
 
-def _set_gradient_checkpointing(self, value=False):
-    self.gradient_checkpointing = value
-    self.mid_block.gradient_checkpointing = value
-    for module in self.down_blocks + self.up_blocks:
-        module.gradient_checkpointing = value   
-                
 def unet_and_text_g_c(unet, text_encoder, unet_enable, text_enable):
-    _set_gradient_checkpointing(unet, value=unet_enable)
+    if unet_enable:
+        unet.enable_gradient_checkpointing()
+    else:
+        unet.disable_gradient_checkpointing()
     if text_enable:
         text_encoder.gradient_checkpointing_enable()
     else:
@@ -565,19 +562,19 @@ def finetune_unet(pipeline, batch, use_offset_noise,
     added_time_ids = added_time_ids.to(device)
 
     losses = []
-    for i in range(2):
-        encoder_hidden_states = (
-            negative_image_embeddings if i==0 else image_embeddings
-        )
-        model_pred = unet(input_latents, c_noise.reshape([bsz]), encoder_hidden_states=encoder_hidden_states, 
-            added_time_ids=added_time_ids,).sample
-        predict_x0 = c_out * model_pred + c_skip * noisy_latents 
-        loss = ((predict_x0 - latents)**2 * loss_weight).mean()
-        '''
-        if motion_mask:
-            loss += F.mse_loss(predict_x0*(1-mask), freeze*(1-mask))
-        ''' 
-        losses.append(loss)
+    if random.random() < 0.15:
+        encoder_hidden_states = negative_image_embeddings
+    else:
+        encoder_hidden_states = image_embeddings
+    model_pred = unet(input_latents, c_noise.reshape([bsz]), encoder_hidden_states=encoder_hidden_states, 
+        added_time_ids=added_time_ids,).sample
+    predict_x0 = c_out * model_pred + c_skip * noisy_latents 
+    loss = ((predict_x0 - latents)**2 * loss_weight).mean()
+    '''
+    if motion_mask:
+        loss += F.mse_loss(predict_x0*(1-mask), freeze*(1-mask))
+    ''' 
+    losses.append(loss)
     loss = losses[0] if len(losses) == 1 else losses[0] + losses[1] 
     return loss
 
