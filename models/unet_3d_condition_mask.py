@@ -330,13 +330,11 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         for module in self.children():
             fn_recursive_set_attention_slice(module, reversed_slice_size)
 
-    def _set_gradient_checkpointing(self, value=False):
+    def _set_gradient_checkpointing(self, module, value: bool = False) -> None:
         self.gradient_checkpointing = value
-        self.mid_block.gradient_checkpointing = value
-        for module in self.down_blocks + self.up_blocks:
-            if isinstance(module, (CrossAttnDownBlock3D, DownBlock3D, CrossAttnUpBlock3D, UpBlock3D)):
-                module.gradient_checkpointing = value   
-                
+        if isinstance(module, (CrossAttnDownBlock3D, DownBlock3D, CrossAttnUpBlock3D, UpBlock3D)):
+            module.gradient_checkpointing = value
+       
     def forward(
         self,
         sample: torch.FloatTensor,

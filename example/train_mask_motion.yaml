@@ -32,7 +32,7 @@ use_offset_noise: False
 
 # Uses schedule rescale, also known as the "better" offset noise. See https://arxiv.org/pdf/2305.08891.pdf
 # If this is enabled, offset noise will be disabled.
-rescale_schedule: False
+rescale_schedule: True
 
 # When True, this extends all items in all enabled datasets to the highest length. 
 # For example, if you have 200 videos and 10 images, 10 images will be duplicated to the length of 200. 
@@ -122,46 +122,6 @@ train_data:
   n_sample_frames: 16
   json_path: '/webvid/animation0.json'
 
-extra_train_data:
-  - dataset_types: 
-      - video_blip
-    train_data:
-      width: 512
-      height: 512
-      use_bucketing: False
-      return_mask: True
-      return_motion: True
-      sample_start_idx: 1
-      fps: 8
-      n_sample_frames: 16
-      json_path: '/webvid/animation1.json'
-  - dataset_types: 
-      - video_blip
-    train_data:
-      width: 512
-      height: 512
-      use_bucketing: False
-      return_mask: True
-      return_motion: True
-      sample_start_idx: 1
-      fps: 8
-      n_sample_frames: 16
-      json_path: '/webvid/animation2.json'
-  - dataset_types: 
-      - video_json
-    train_data:
-      width: 512
-      height: 512
-      use_bucketing: False
-      return_mask: True
-      return_motion: True
-      sample_start_idx: 1
-      fps: 8
-      n_sample_frames: 16
-      video_dir: '/webvid/webvid/data/videos'
-      video_json: '/webvid/webvid/data/40K.json'
- 
- 
 # Validation data parameters.
 validation_data:
 

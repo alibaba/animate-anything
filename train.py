@@ -32,23 +32,21 @@ from diffusers.models import AutoencoderKL
 from diffusers import DPMSolverMultistepScheduler, DDPMScheduler
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.optimization import get_scheduler
-from diffusers.utils import check_min_version, export_to_video
+from diffusers.utils import check_min_version
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.models.attention_processor import AttnProcessor2_0, Attention
 from diffusers.models.attention import BasicTransformerBlock
-from diffusers.pipelines.text_to_video_synthesis.pipeline_text_to_video_synth import tensor2vid
+from diffusers.schedulers.scheduling_ddim import rescale_zero_terminal_snr
 
 from transformers import CLIPTextModel, CLIPTokenizer
 from transformers.models.clip.modeling_clip import CLIPEncoder
-from utils.dataset import VideoJsonDataset, SingleVideoDataset, \
-    ImageDataset, VideoFolderDataset, CachedDataset, VideoBLIPDataset
+from utils.dataset import get_train_dataset, extend_datasets
 from einops import rearrange, repeat
 import imageio
 
 
 from models.unet_3d_condition_mask import UNet3DConditionModel
 from models.pipeline import LatentToVideoPipeline
-from utils.lora_handler import LoraHandler, LORA_VERSIONS
 from utils.common import read_mask, generate_random_mask, slerp, calculate_motion_score, \
     read_video, calculate_motion_precision, calculate_latent_motion_score, \
     DDPM_forward, DDPM_forward_timesteps, DDPM_forward_mask, motion_mask_loss, \
@@ -74,48 +72,6 @@ def accelerate_set_verbose(accelerator):
         transformers.utils.logging.set_verbosity_error()
         diffusers.utils.logging.set_verbosity_error()
 
-def get_train_dataset(dataset_types, train_data, tokenizer):
-    train_datasets = []
-    dataset_cls = [VideoJsonDataset, SingleVideoDataset, ImageDataset, VideoFolderDataset, VideoBLIPDataset]
-    dataset_map = {d.__getname__(): d for d in dataset_cls}
-
-    # Loop through all available datasets, get the name, then add to list of data to process.
-    for dataset in dataset_types:
-        if dataset in dataset_map:
-            train_datasets.append(dataset_map[dataset](**train_data, tokenizer=tokenizer))
-        else:
-            raise ValueError(f"Dataset type not found: {dataset} not in {dataset_map.keys()}")
-    return train_datasets
-
-def extend_datasets(datasets, dataset_items, extend=False):
-    biggest_data_len = max(x.__len__() for x in datasets)
-    extended = []
-    for dataset in datasets:
-        if dataset.__len__() == 0:
-            del dataset
-            continue
-        if dataset.__len__() < biggest_data_len:
-            for item in dataset_items:
-                if extend and item not in extended and hasattr(dataset, item):
-                    print(f"Extending {item}")
-
-                    value = getattr(dataset, item)
-                    value *= biggest_data_len
-                    value = value[:biggest_data_len]
-
-                    setattr(dataset, item, value)
-
-                    print(f"New {item} dataset length: {dataset.__len__()}")
-                    extended.append(item)
-
-def export_to_video(video_frames, output_video_path, fps):
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    h, w, _ = video_frames[0].shape
-    video_writer = cv2.VideoWriter(output_video_path, fourcc, fps=fps, frameSize=(w, h))
-    for i in range(len(video_frames)):
-        img = cv2.cvtColor(video_frames[i], cv2.COLOR_RGB2BGR)
-        video_writer.write(img)
-
 def create_output_folders(output_dir, config):
     now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     out_dir = os.path.join(output_dir, f"train_{now}")
@@ -126,28 +82,38 @@ def create_output_folders(output_dir, config):
 
     return out_dir
 
-def load_primary_models(pretrained_model_path, motion_mask, motion_strength):
+def load_primary_models(pretrained_model_path, in_channels=-1, motion_strength=False):
     noise_scheduler = DDPMScheduler.from_pretrained(pretrained_model_path, subfolder="scheduler")
     tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_path, subfolder="tokenizer")
     text_encoder = CLIPTextModel.from_pretrained(pretrained_model_path, subfolder="text_encoder")
     vae = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae")
-    unet = UNet3DConditionModel.from_pretrained(pretrained_model_path, subfolder="unet", 
-        low_cpu_mem_usage=False, device_map=None, motion_mask=motion_mask, motion_strength=motion_strength)
-    if pretrained_model_path.endswith('zeroscope_v2_576w'):
-        #first time init, modify unet conv in2
-        unet.conv_in2.bias.data = copy.deepcopy(unet.conv_in.bias)
-        torch.nn.init.zeros_(unet.conv_in2.weight)
-        unet.conv_in2.weight.data[:,1:]= copy.deepcopy(unet.conv_in.weight)
+    unet = UNet3DConditionModel.from_pretrained(pretrained_model_path, subfolder="unet")
+    if in_channels>0 and unet.config.in_channels != in_channels:
+        #first time init, modify unet conv in
+        unet2 = unet
+        unet = UNet3DConditionModel.from_pretrained(pretrained_model_path, subfolder="unet", 
+            in_channels=in_channels,
+            low_cpu_mem_usage=False, device_map=None, ignore_mismatched_sizes=True, 
+            motion_strength=motion_strength)
+        unet.conv_in.bias.data = copy.deepcopy(unet2.conv_in.bias)
+        torch.nn.init.zeros_(unet.conv_in.weight)
+        load_in_channel = unet2.conv_in.weight.data.shape[1]
+        unet.conv_in.weight.data[:,in_channels-load_in_channel:]= copy.deepcopy(unet2.conv_in.weight.data)
+        del unet2
 
     return noise_scheduler, tokenizer, text_encoder, vae, unet
 
 def unet_and_text_g_c(unet, text_encoder, unet_enable, text_enable):
-    unet._set_gradient_checkpointing(value=unet_enable)
+    if unet_enable:
+        unet.enable_gradient_checkpointing()
+    else:
+        unet.disable_gradient_checkpointing()
+
     if text_enable:
         text_encoder.gradient_checkpointing_enable()
     else:
         text_encoder.gradient_checkpointing_disable()
-
+      
 def freeze_models(models_to_freeze):
     for model in models_to_freeze:
         if model is not None: model.requires_grad_(False) 
@@ -228,28 +194,8 @@ def create_optimizer_params(model_list, lr):
 
     for optim in model_list:
         model, condition, extra_params, is_lora, negation = optim.values()
-        # Check if we are doing LoRA training.
-        if is_lora and condition and isinstance(model, list): 
-            params = create_optim_params(
-                params=itertools.chain(*model), 
-                extra_params=extra_params
-            )
-            optimizer_params.append(params)
-            continue
-            
-        if is_lora and  condition and not isinstance(model, list):
-            for n, p in model.named_parameters():
-                if 'lora' in n:
-                    params = create_optim_params(n, p, lr, extra_params)
-                    optimizer_params.append(params)
-            continue
-
-        # If this is true, we can train it.
-        if condition:
-            for n, p in model.named_parameters():
-                should_negate = 'lora' in n and not is_lora
-                if should_negate: continue
-
+        for n, p in model.named_parameters():
+            if p.requires_grad:
                 params = create_optim_params(n, p, lr, extra_params)
                 optimizer_params.append(params)
     
@@ -283,76 +229,23 @@ def cast_to_gpu_and_type(model_list, device, weight_dtype):
     for model in model_list:
         if model is not None: model.to(device, dtype=weight_dtype)
 
-def handle_cache_latents(
-        should_cache, 
-        output_dir, 
-        train_dataloader, 
-        train_batch_size, 
-        vae, 
-        cached_latent_dir=None,
-        shuffle=False
-    ):
-
-    # Cache latents by storing them in VRAM. 
-    # Speeds up training and saves memory by not encoding during the train loop.
-    if not should_cache: return None
-    vae.to('cuda', dtype=torch.float16)
-    vae.enable_slicing()
-    
-    cached_latent_dir = (
-        os.path.abspath(cached_latent_dir) if cached_latent_dir is not None else None 
-        )
-
-    if cached_latent_dir is None:
-        cache_save_dir = f"{output_dir}/cached_latents"
-        os.makedirs(cache_save_dir, exist_ok=True)
-
-        for i, batch in enumerate(tqdm(train_dataloader, desc="Caching Latents.")):
-
-            save_name = f"cached_{i}"
-            full_out_path =  f"{cache_save_dir}/{save_name}.pt"
-
-            pixel_values = batch['pixel_values'].to('cuda', dtype=torch.float16)
-            batch['pixel_values'] = tensor_to_vae_latent(pixel_values, vae)
-            for k, v in batch.items(): batch[k] = v[0]
-        
-            torch.save(batch, full_out_path)
-            del pixel_values
-            del batch
-
-            # We do this to avoid fragmentation from casting latents between devices.
-            torch.cuda.empty_cache()
-    else:
-        cache_save_dir = cached_latent_dir
-        
-
-    return torch.utils.data.DataLoader(
-        CachedDataset(cache_dir=cache_save_dir), 
-        batch_size=train_batch_size, 
-        shuffle=shuffle,
-        num_workers=0
-    ) 
-
-def handle_trainable_modules(model, trainable_modules, not_trainable_modules=[], is_enabled=True, negation=None):
+def handle_trainable_modules(model, trainable_modules=None, is_enabled=True, negation=None):
     global already_printed_trainables
 
     # This can most definitely be refactored :-)
     unfrozen_params = 0
-    print(f"not trainable {not_trainable_modules}")
-    for name, module in model.named_modules():
-        check = False
-        for tm in tuple(trainable_modules):
-            if tm == 'all' or (tm in name and 'lora' not in name):
-                check = True
-                break
-        for tm in not_trainable_modules:
-            if tm in name:
-                check = False
-                break
-        if check:
-            for m in module.parameters():
-                m.requires_grad_(is_enabled)
-                if is_enabled: unfrozen_params +=1
+    if trainable_modules is not None:
+        for name, module in model.named_modules():
+            for tm in tuple(trainable_modules):
+                if tm == 'all':
+                    model.requires_grad_(is_enabled)
+                    unfrozen_params =len(list(model.parameters()))
+                    break
+                    
+                if tm in name and 'lora' not in name:
+                    for m in module.parameters():
+                        m.requires_grad_(is_enabled)
+                        if is_enabled: unfrozen_params +=1
 
     if unfrozen_params > 0 and not already_printed_trainables:
         already_printed_trainables = True 
@@ -369,37 +262,6 @@ def sample_noise(latents, noise_strength, use_offset_noise=False):
 
     return noise_latents
 
-def enforce_zero_terminal_snr(betas):
-    """
-    Corrects noise in diffusion schedulers.
-    From: Common Diffusion Noise Schedules and Sample Steps are Flawed
-    https://arxiv.org/pdf/2305.08891.pdf
-    """
-    # Convert betas to alphas_bar_sqrt
-    alphas = 1 - betas
-    alphas_bar = alphas.cumprod(0)
-    alphas_bar_sqrt = alphas_bar.sqrt()
-
-    # Store old values.
-    alphas_bar_sqrt_0 = alphas_bar_sqrt[0].clone()
-    alphas_bar_sqrt_T = alphas_bar_sqrt[-1].clone()
-
-    # Shift so the last timestep is zero.
-    alphas_bar_sqrt -= alphas_bar_sqrt_T
-
-    # Scale so the first timestep is back to the old value.
-    alphas_bar_sqrt *= alphas_bar_sqrt_0 / (
-        alphas_bar_sqrt_0 - alphas_bar_sqrt_T
-    )
-
-    # Convert alphas_bar_sqrt to betas
-    alphas_bar = alphas_bar_sqrt ** 2
-    alphas = alphas_bar[1:] / alphas_bar[:-1]
-    alphas = torch.cat([alphas_bar[0:1], alphas])
-    betas = 1 - alphas
-
-    return betas
-
 def should_sample(global_step, validation_steps, validation_data):
     return (global_step % validation_steps == 0 or global_step == 5)  \
     and validation_data.sample_preview
@@ -412,9 +274,6 @@ def save_pipe(
         text_encoder, 
         vae, 
         output_dir,
-        lora_manager: LoraHandler,
-        unet_target_replace_module=None,
-        text_target_replace_module=None,
         is_checkpoint=False,
         save_pretrained_model=True
     ):
@@ -424,39 +283,27 @@ def save_pipe(
         os.makedirs(save_path, exist_ok=True)
     else:
         save_path = output_dir
+    # Copy the model without creating a reference to it. This allows keeping the state of our lora training if enabled.
+    unet_out = copy.deepcopy(unet)
+    text_encoder_out = copy.deepcopy(text_encoder)
+    vae_out = copy.deepcopy(vae)
 
-    # Save the dtypes so we can continue training at the same precision.
-    u_dtype, t_dtype, v_dtype = unet.dtype, text_encoder.dtype, vae.dtype 
-
-   # Copy the model without creating a reference to it. This allows keeping the state of our lora training if enabled.
-    unet_save = copy.deepcopy(unet.cpu())
-    text_encoder_save = copy.deepcopy(text_encoder.cpu())
-
-    unet_out = copy.deepcopy(accelerator.unwrap_model(unet_save, keep_fp32_wrapper=False))
-    text_encoder_out = copy.deepcopy(accelerator.unwrap_model(text_encoder_save, keep_fp32_wrapper=False))
-
-    pipeline = LatentToVideoPipeline.from_pretrained(
+    pipeline = TextToVideoSDPipeline.from_pretrained(
         path,
         unet=unet_out,
         text_encoder=text_encoder_out,
-        vae=vae,
+        vae=vae_out,
     ).to(torch_dtype=torch.float32)
     
-    lora_manager.save_lora_weights(model=pipeline, save_path=save_path, step=global_step)
-
     if save_pretrained_model:
         pipeline.save_pretrained(save_path)
-
-    if is_checkpoint:
-        unet, text_encoder = accelerator.prepare(unet, text_encoder)
-        models_to_cast_back = [(unet, u_dtype), (text_encoder, t_dtype), (vae, v_dtype)]
-        [x[0].to(accelerator.device, dtype=x[1]) for x in models_to_cast_back]
-
+    
     logger.info(f"Saved model at {save_path} on step {global_step}")
     
     del pipeline
     del unet_out
     del text_encoder_out
+    del vae_out
     torch.cuda.empty_cache()
     gc.collect()
 
@@ -489,15 +336,14 @@ def main(
     validation_steps: int = 100,
     trainable_modules: Tuple[str] = None, # Eg: ("attn1", "attn2")
     not_trainable_modules = [],
-    trainable_text_modules: Tuple[str] = None, # Eg: ("all"), this also applies to trainable_modules
     extra_unet_params = None,
     extra_text_encoder_params = None,
     train_batch_size: int = 1,
     max_train_steps: int = 500,
     learning_rate: float = 5e-5,
     scale_lr: bool = False,
-    lr_scheduler: str = "constant",
-    lr_warmup_steps: int = 0,
+    lr_scheduler: str = "constant_with_warmup",
+    lr_warmup_steps: int = 20,
     adam_beta1: float = 0.9,
     adam_beta2: float = 0.999,
     adam_weight_decay: float = 1e-2,
@@ -514,29 +360,17 @@ def main(
     enable_xformers_memory_efficient_attention: bool = True,
     enable_torch_2_attn: bool = False,
     seed: Optional[int] = None,
-    train_text_encoder: bool = False,
     use_offset_noise: bool = False,
     rescale_schedule: bool = False,
     offset_noise_strength: float = 0.1,
     extend_dataset: bool = False,
     cache_latents: bool = False,
     cached_latent_dir = None,
-    lora_version: LORA_VERSIONS = LORA_VERSIONS[0],
-    save_lora_for_webui: bool = False,
-    only_lora_for_webui: bool = False,
-    lora_bias: str = 'none',
-    use_unet_lora: bool = False,
-    use_text_lora: bool = False,
-    unet_lora_modules: Tuple[str] = ["ResnetBlock2D"],
-    text_encoder_lora_modules: Tuple[str] = ["CLIPEncoderLayer"],
     save_pretrained_model: bool = True,
-    lora_rank: int = 16,
-    lora_path: str = '',
-    lora_unet_dropout: float = 0.1,
-    lora_text_dropout: float = 0.1,
     logger_type: str = 'tensorboard',
     motion_mask=False, 
     motion_strength=False,
+    in_channels=5,
     **kwargs
 ):
     *_, config = inspect.getargvalues(inspect.currentframe())
@@ -563,7 +397,7 @@ def main(
        output_dir = create_output_folders(output_dir, config)
 
     # Load scheduler, tokenizer and models.
-    noise_scheduler, tokenizer, text_encoder, vae, unet = load_primary_models(pretrained_model_path, motion_mask, motion_strength)
+    noise_scheduler, tokenizer, text_encoder, vae, unet = load_primary_models(pretrained_model_path, in_channels, motion_strength=motion_strength)
     vae_processor = VaeImageProcessor()
     # Freeze any necessary models
     freeze_models([vae, text_encoder, unet])
@@ -579,43 +413,23 @@ def main(
     # Initialize the optimizer
     optimizer_cls = get_optimizer(use_8bit_adam)
 
-    # Use LoRA if enabled.  
-    lora_manager = LoraHandler(
-        version=lora_version, 
-        use_unet_lora=use_unet_lora,
-        use_text_lora=use_text_lora,
-        save_for_webui=save_lora_for_webui,
-        only_for_webui=only_lora_for_webui,
-        unet_replace_modules=unet_lora_modules,
-        text_encoder_replace_modules=text_encoder_lora_modules,
-        lora_bias=lora_bias
-    )
-
-    unet_lora_params, unet_negation = lora_manager.add_lora_to_model(
-        use_unet_lora, unet, lora_manager.unet_replace_modules, lora_unet_dropout, lora_path, r=lora_rank) 
-
-    text_encoder_lora_params, text_encoder_negation = lora_manager.add_lora_to_model(
-        use_text_lora, text_encoder, lora_manager.text_encoder_replace_modules, lora_text_dropout, lora_path, r=lora_rank) 
-
     # Create parameters to optimize over with a condition (if "condition" is true, optimize it)
     extra_unet_params = extra_unet_params if extra_unet_params is not None else {}
     extra_text_encoder_params = extra_unet_params if extra_unet_params is not None else {}
 
     trainable_modules_available = trainable_modules is not None
-    trainable_text_modules_available = (train_text_encoder and trainable_text_modules is not None)
-    
+        
+    # Unfreeze UNET Layers
+    if trainable_modules_available:
+        unet.train()
+        handle_trainable_modules(
+            unet, 
+            trainable_modules, 
+            is_enabled=True,
+        )
+
     optim_params = [
-        param_optim(unet, trainable_modules_available, extra_params=extra_unet_params, negation=unet_negation),
-        param_optim(text_encoder, trainable_text_modules_available, 
-                        extra_params=extra_text_encoder_params, 
-                        negation=text_encoder_negation
-                   ),
-        param_optim(text_encoder_lora_params, use_text_lora, is_lora=True, 
-                        extra_params={**{"lr": learning_rate}, **extra_unet_params}
-                    ),
-        param_optim(unet_lora_params, use_unet_lora, is_lora=True, 
-                        extra_params={**{"lr": learning_rate}, **extra_text_encoder_params}
-                    )
+        param_optim(unet, trainable_modules_available, extra_params=extra_unet_params),
     ]
 
     params = create_optimizer_params(optim_params, learning_rate)
@@ -670,26 +484,12 @@ def main(
         shuffle=shuffle
     )
 
-     # Latents caching
-    cached_data_loader = handle_cache_latents(
-        cache_latents, 
-        output_dir,
-        train_dataloader, 
-        train_batch_size, 
-        vae,
-        cached_latent_dir
-    ) 
-
-    if cached_data_loader is not None: 
-        train_dataloader = cached_data_loader
-
     # Prepare everything with our `accelerator`.
-    unet, optimizer,train_dataloader, lr_scheduler, text_encoder = accelerator.prepare(
+    unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         unet, 
         optimizer, 
         train_dataloader, 
         lr_scheduler, 
-        text_encoder
     )
 
     # Use Gradient Checkpointing if enabled.
@@ -713,13 +513,7 @@ def main(
 
     # Fix noise schedules to predcit light and dark areas if available.
     if not use_offset_noise and rescale_schedule:
-        noise_scheduler.betas = enforce_zero_terminal_snr(noise_scheduler.betas)
-
-    # We need to recalculate our total training steps as the size of the training dataloader may have changed.
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / gradient_accumulation_steps)
-
-    # Afterwards we recalculate our number of training epochs
-    num_train_epochs = math.ceil(max_train_steps / num_update_steps_per_epoch)
+        noise_scheduler.betas = rescale_zero_terminal_snr(noise_scheduler.betas)
 
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
@@ -729,6 +523,7 @@ def main(
 
     # Train!
     total_batch_size = train_batch_size * accelerator.num_processes * gradient_accumulation_steps
+    num_train_epochs = math.ceil(max_train_steps * gradient_accumulation_steps / len(train_dataloader) / accelerator.num_processes)
 
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {len(train_dataset)}")
@@ -743,36 +538,7 @@ def main(
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(global_step, max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
-    
-    # Check if we are training the text encoder
-    text_trainable = (train_text_encoder or lora_manager.use_text_lora)
-    
-    # Unfreeze UNET Layers
-    unet.train()
-    handle_trainable_modules(
-        unet, 
-        trainable_modules, 
-        not_trainable_modules,
-        is_enabled=True,
-        negation=unet_negation
-    )
 
-
-    # Enable text encoder training
-    if text_trainable:
-        text_encoder.train()
-
-        if lora_manager.use_text_lora: 
-            text_encoder.text_model.embeddings.requires_grad_(True)
-
-        if global_step == 0 and train_text_encoder:
-            handle_trainable_modules(
-                text_encoder, 
-                trainable_modules=trainable_text_modules,
-                negation=text_encoder_negation
-        )
-        cast_to_gpu_and_type([text_encoder], accelerator.device, torch.float32)
-            
     # *Potentially* Fixes gradient checkpointing training.
     # See: https://github.com/prigoyal/pytorch_memonger/blob/master/tutorial/Checkpointing_for_PyTorch_models.ipynb
     if kwargs.get('eval_train', False):
@@ -793,9 +559,9 @@ def main(
                 continue
             with accelerator.accumulate(unet) ,accelerator.accumulate(text_encoder):
                 with accelerator.autocast():
-                    loss, latents = finetune_unet(batch, use_offset_noise, cache_latents, vae, 
+                    loss, latents = finetune_unet(accelerator, batch, use_offset_noise, cache_latents, vae, 
                         rescale_schedule, offset_noise_strength, text_encoder, 
-                        text_trainable, unet, noise_scheduler, uncond_input, motion_mask, motion_strength)
+                        unet, noise_scheduler, uncond_input, motion_mask, motion_strength)
                 
                 device = loss.device 
                 # Gather the losses across all processes for logging (if we use distributed training).
@@ -805,11 +571,7 @@ def main(
                 # Backpropagate
                 try:
                     accelerator.backward(loss)
-
-                    if any([train_text_encoder, use_text_lora]):
-                        params_to_clip = list(unet.parameters()) + list(text_encoder.parameters())
-                    else:
-                        params_to_clip = unet.parameters()
+                    params_to_clip = unet.parameters()
 
                     accelerator.clip_grad_norm_(params_to_clip, max_grad_norm)
                 
@@ -827,38 +589,25 @@ def main(
                 accelerator.log({"train_loss": train_loss}, step=global_step)
                 train_loss = 0.0
             
-                if global_step % checkpointing_steps == 0:
+                if global_step % checkpointing_steps == 0 and accelerator.is_main_process:
                     save_pipe(
                         pretrained_model_path, 
                         global_step, 
                         accelerator, 
-                        unet, 
-                        text_encoder, 
+                        accelerator.unwrap_model(unet),
+                        accelerator.unwrap_model(text_encoder), 
                         vae, 
                         output_dir, 
-                        lora_manager,
-                        unet_lora_modules,
-                        text_encoder_lora_modules,
                         is_checkpoint=True,
                         save_pretrained_model=save_pretrained_model
                     )
 
 
-                if should_sample(global_step, validation_steps, validation_data):
+                if should_sample(global_step, validation_steps, validation_data) and accelerator.is_main_process:
                     if global_step == 1: print("Performing validation prompt.")
-                    if accelerator.is_main_process:
-                        with accelerator.autocast():
-                            batch_eval(unet, text_encoder, vae, vae_processor, lora_manager, pretrained_model_path, 
-                                validation_data, f"{output_dir}/samples", True)
-
-                    unet_and_text_g_c(
-                        unet, 
-                        text_encoder, 
-                        gradient_checkpointing, 
-                        text_encoder_gradient_checkpointing
-                    )
-
-                    lora_manager.deactivate_lora_train([unet, text_encoder], False)    
+                    with accelerator.autocast():
+                        batch_eval(accelerator.unwrap_model(unet), accelerator.unwrap_model(text_encoder), vae, vae_processor, pretrained_model_path, 
+                            validation_data, f"{output_dir}/samples", True, iters=1)
 
             logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             accelerator.log({"training_loss": loss.detach().item()}, step=step)
@@ -874,13 +623,10 @@ def main(
                 pretrained_model_path, 
                 global_step, 
                 accelerator, 
-                unet, 
-                text_encoder, 
+                accelerator.unwrap_model(unet),
+                accelerator.unwrap_model(text_encoder), 
                 vae, 
                 output_dir, 
-                lora_manager,
-                unet_lora_modules,
-                text_encoder_lora_modules,
                 is_checkpoint=False,
                 save_pretrained_model=save_pretrained_model
         )     
@@ -909,13 +655,14 @@ def remove_noise(
         removed = (original_samples - sqrt_one_minus_alpha_prod * noise)/sqrt_alpha_prod
         return removed
 
-def finetune_unet(batch, use_offset_noise,
+def finetune_unet(accelerator, batch, use_offset_noise,
     cache_latents, vae, rescale_schedule, offset_noise_strength, 
-    text_encoder, text_trainable, unet, noise_scheduler, uncond_input, 
+    text_encoder, unet, noise_scheduler, uncond_input, 
     motion_mask, motion_strength):
     vae.eval()
+    dtype=vae.dtype
     # Convert videos to latent space
-    pixel_values = batch["pixel_values"]
+    pixel_values = batch["pixel_values"].to(dtype)
     bsz = pixel_values.shape[0]
     if not cache_latents:
         latents = tensor_to_vae_latent(pixel_values, vae)
@@ -926,7 +673,7 @@ def finetune_unet(batch, use_offset_noise,
     condition_latent = latents[:,:, 0:1].detach().clone()
 
     mask = batch["mask"]
-    mask = mask.div(255).to(latents.device)
+    mask = mask.div(255).to(dtype)
 
     h, w = latents.shape[-2:]
     mask = T.Resize((h, w), antialias=False)(mask)
@@ -1032,7 +779,9 @@ def eval(pipeline, vae_processor, validation_data, out_file, index, forward_t=25
             timesteps=timesteps,
         )
     if preview:
-        imageio.mimwrite(out_file, video_frames, fps=validation_data.get('fps', 8))
+        fps = validation_data.get('fps', 8)
+        imageio.mimwrite(out_file, video_frames, duration=int(1000/fps), loop=0)
+        imageio.mimwrite(out_file.replace('gif', '.mp4'), video_frames, fps=fps)
     real_motion_strength = calculate_latent_motion_score(video_latents).cpu().numpy()[0]
     precision = calculate_motion_precision(video_frames, np_mask)
     print(f"save file {out_file}, motion strength {motion_strength} -> {real_motion_strength}, motion precision {precision}")
@@ -1041,29 +790,18 @@ def eval(pipeline, vae_processor, validation_data, out_file, index, forward_t=25
     torch.cuda.empty_cache()
     return precision
 
-def batch_eval(unet, text_encoder, vae, vae_processor, lora_manager, pretrained_model_path, 
-    validation_data, output_dir, preview, global_step=0):
+def batch_eval(unet, text_encoder, vae, vae_processor, pretrained_model_path, 
+    validation_data, output_dir, preview, global_step=0, iters=6):
     device = vae.device
     dtype = vae.dtype
     unet.eval()
     text_encoder.eval()
-    unet_and_text_g_c(unet, text_encoder, False, False)
-    if lora_manager is not None:
-        lora_manager.deactivate_lora_train([unet, text_encoder], True)    
-    if hasattr(unet, 'module'):
-        pipeline = LatentToVideoPipeline.from_pretrained(
-            pretrained_model_path,
-            text_encoder=text_encoder,
-            vae=vae,
-            unet=unet.module
-        )
-    else:
-        pipeline = LatentToVideoPipeline.from_pretrained(
-            pretrained_model_path,
-            text_encoder=text_encoder,
-            vae=vae,
-            unet=unet
-        )
+    pipeline = LatentToVideoPipeline.from_pretrained(
+        pretrained_model_path,
+        text_encoder=text_encoder,
+        vae=vae,
+        unet=unet
+    )
 
     diffusion_scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
     diffusion_scheduler.set_timesteps(validation_data.num_inference_steps, device=device)
@@ -1071,13 +809,12 @@ def batch_eval(unet, text_encoder, vae, vae_processor, lora_manager, pretrained_
 
     motion_errors = []
     motion_precisions = []
-    iters = 6
     motion_precision = 0
     for t in range(iters):
         name= os.path.basename(validation_data.prompt_image)
         out_file_dir = f"{output_dir}/{name.split('.')[0]}"
         os.makedirs(out_file_dir, exist_ok=True)
-        out_file = f"{out_file_dir}/{global_step+t}.mp4"
+        out_file = f"{out_file_dir}/{global_step+t}.gif"
         precision = eval(pipeline, vae_processor, 
             validation_data, out_file, t, forward_t=validation_data.num_inference_steps, preview=preview)
         motion_precision += precision
@@ -1098,7 +835,7 @@ def main_eval(
     if seed is not None:
         set_seed(seed)
     # Load scheduler, tokenizer and models.
-    noise_scheduler, tokenizer, text_encoder, vae, unet = load_primary_models(pretrained_model_path, motion_mask, motion_strength)
+    noise_scheduler, tokenizer, text_encoder, vae, unet = load_primary_models(pretrained_model_path, motion_strength=motion_strength)
     vae_processor = VaeImageProcessor()
     # Freeze any necessary models
     freeze_models([vae, text_encoder, unet])
@@ -1106,8 +843,6 @@ def main_eval(
     # Enable xformers if available
     handle_memory_attention(enable_xformers_memory_efficient_attention, enable_torch_2_attn, unet)
 
-    lora_manager = None
-    
     # Enable VAE slicing to save memory.
     vae.enable_slicing()
 
@@ -1118,7 +853,7 @@ def main_eval(
     # Move text encoders, and VAE to GPU
     models_to_cast = [text_encoder, unet, vae]
     cast_to_gpu_and_type(models_to_cast, torch.device("cuda"), weight_dtype)
-    batch_eval(unet, text_encoder, vae, vae_processor, lora_manager, pretrained_model_path, 
+    batch_eval(unet, text_encoder, vae, vae_processor, pretrained_model_path, 
         validation_data, "output/demo", True)
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ https://github.com/alibaba/animate-anything/assets/1107525/e2659674-c813-402a-8a
 | ![Input image](docs/fish.jpg)  | ![](docs/fish_mask.png) | ![](docs/fish.gif) The fish and tadpoles are playing.|
 
 ## News
+**2024.2.5**: Support multiple GPUs training with Accelerator DeepSpeed. Config DeepSpeed zero_stage 2 and offload_optimizer_device cpu, you can do full finetuning animate-anything with 4x16G V100 GPUs and SVD with 4x24G A10 GPUs now.
+
 **2023.12.27**: Support finetuning based on SVD model. Update SVD based animate_anything_svd_v1.0
 
 **2023.12.18**: Update model to animate_anything_512_v1.02
@@ -112,7 +114,7 @@ All configuration details are placed in `example/train_mask_motion.yaml`. Each p
 
 
 ### Finetuning anymate-anything
-You can finetune anymate-anything with text, motion mask, motion strength guidance on your own dataset. The following config requires around 30G GPU RAM. You can reduce the training video resolution and frames to reduce GPU RAM:
+You can finetune anymate-anything with text, motion mask, motion strength guidance on your own dataset. The following config requires around 30G GPU RAM. You can reduce the train_batch_size, train_data.width, train_data.height, and n_sample_frames in the config to reduce GPU RAM:
 ```
 python train.py --config example/train_mask_motion.yaml pretrained_model_path=<download_model>
 ```
@@ -127,6 +129,15 @@ If you only want to finetune SVD on your own dataset without motion mask control
 ```
 python train_svd.py --config example/train_svd.yaml pretrained_model_path=<svd_model>
 ```
+
+### Multiple GPUs training
+I strongly recommend use multiple GPUs training with Accelerator, which will largely decrease the VRAM requirement. Please first config the accelerator with deepseed. An example config is located in example/deepsepped.yaml.
+
+And then replace 'python train_xx.py ...' commands above with 'accelerate launch train_xx.py ...', for example:
+```
+accelerate launch --config_file example/deepseepd.yaml train_svd.py --config example/train_svd_mask.yaml pretrained_model_path=<download_model>
+```
+
 
 ## Bibtex
 Please cite this paper if you find the code is useful for your research:

@@ -31,7 +31,7 @@ from diffusers.models import AutoencoderKL, UNetSpatioTemporalConditionModel
 from diffusers import DPMSolverMultistepScheduler, DDPMScheduler, EulerDiscreteScheduler
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.optimization import get_scheduler
-from diffusers.utils import check_min_version, export_to_video
+from diffusers.utils import check_min_version
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.models.attention_processor import AttnProcessor2_0, Attention
 from diffusers.models.attention import BasicTransformerBlock
@@ -41,15 +41,13 @@ from diffusers.pipelines.stable_video_diffusion.pipeline_stable_video_diffusion 
 
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPVisionModel, CLIPImageProcessor, CLIPTextConfig
 from transformers.models.clip.modeling_clip import CLIPEncoder
-from utils.dataset import VideoJsonDataset, SingleVideoDataset, \
-    ImageDataset, VideoFolderDataset, CachedDataset, VideoBLIPDataset
+from utils.dataset import get_train_dataset, extend_datasets
 from einops import rearrange, repeat
 import imageio
 
 
 from models.unet_3d_condition_mask import UNet3DConditionModel
 from models.pipeline import MaskStableVideoDiffusionPipeline
-from utils.lora_handler import LoraHandler, LORA_VERSIONS
 from utils.common import read_mask, generate_random_mask, slerp, calculate_motion_score, \
     read_video, calculate_motion_precision, calculate_latent_motion_score, \
     DDPM_forward, DDPM_forward_timesteps, motion_mask_loss
@@ -73,48 +71,6 @@ def accelerate_set_verbose(accelerator):
     else:
         transformers.utils.logging.set_verbosity_error()
         diffusers.utils.logging.set_verbosity_error()
-
-def get_train_dataset(dataset_types, train_data, tokenizer):
-    train_datasets = []
-    dataset_cls = [VideoJsonDataset, SingleVideoDataset, ImageDataset, VideoFolderDataset, VideoBLIPDataset]
-    dataset_map = {d.__getname__(): d for d in dataset_cls}
-
-    # Loop through all available datasets, get the name, then add to list of data to process.
-    for dataset in dataset_types:
-        if dataset in dataset_map:
-            train_datasets.append(dataset_map[dataset](**train_data, tokenizer=tokenizer))
-        else:
-            raise ValueError(f"Dataset type not found: {dataset} not in {dataset_map.keys()}")
-    return train_datasets
-
-def extend_datasets(datasets, dataset_items, extend=False):
-    biggest_data_len = max(x.__len__() for x in datasets)
-    extended = []
-    for dataset in datasets:
-        if dataset.__len__() == 0:
-            del dataset
-            continue
-        if dataset.__len__() < biggest_data_len:
-            for item in dataset_items:
-                if extend and item not in extended and hasattr(dataset, item):
-                    print(f"Extending {item}")
-
-                    value = getattr(dataset, item)
-                    value *= biggest_data_len
-                    value = value[:biggest_data_len]
-
-                    setattr(dataset, item, value)
-
-                    print(f"New {item} dataset length: {dataset.__len__()}")
-                    extended.append(item)
-
-def export_to_video(video_frames, output_video_path, fps):
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    h, w, _ = video_frames[0].shape
-    video_writer = cv2.VideoWriter(output_video_path, fourcc, fps=fps, frameSize=(w, h))
-    for i in range(len(video_frames)):
-        img = cv2.cvtColor(video_frames[i], cv2.COLOR_RGB2BGR)
-        video_writer.write(img)
 
 def create_output_folders(output_dir, config):
     now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
@@ -145,73 +101,6 @@ def convert_svd(pretrained_model_path, out_path):
     new_pipeline = StableVideoDiffusionPipeline.from_pretrained(
         pretrained_model_path, unet=unet)
     new_pipeline.save_pretrained(out_path)
-
-def handle_cache_latents(
-        should_cache, 
-        output_dir, 
-        train_dataloader, 
-        train_batch_size, 
-        pipeline,
-        device,
-        cached_latent_dir=None,
-        shuffle=False,
-    ):
-
-    # Cache latents by storing them in VRAM. 
-    # Speeds up training and saves memory by not encoding during the train loop.
-    if not should_cache: return None
-    pipeline.to(device, dtype=torch.half) 
-    cached_latent_dir = (
-        os.path.abspath(cached_latent_dir) if cached_latent_dir is not None else None 
-        )
-
-    if cached_latent_dir is None:
-        cache_save_dir = f"{output_dir}/cached_latents"
-        os.makedirs(cache_save_dir, exist_ok=True)
-
-        for i, batch in enumerate(tqdm(train_dataloader, desc="Caching Latents.")):
-            save_name = f"cached_{i}"
-            full_out_path =  f"{cache_save_dir}/{save_name}.pt"
-
-            pixel_values = batch['pixel_values'].to(device)
-            bsz, num_frames = pixel_values.shape[:2]
-            frames = rearrange(pixel_values, 'b f c h w-> (b f) c h w').to(torch.half)
-            latents = pipeline.vae.encode(frames).latent_dist.mode()
-            latents = rearrange(latents, '(b f) c h w-> b f c h w', b=bsz)
-            latents = latents * pipeline.vae.config.scaling_factor
-            batch['latent'] = latents
-            # vae image to clip image
-            images = _resize_with_antialiasing(pixel_values[:,0], (224, 224)).to(torch.half)
-            images = (images + 1.0) / 2.0 # [-1, 1] -> [0, 1]
-            images = pipeline.feature_extractor(
-                images=images,
-                do_normalize=True,
-                do_center_crop=False,
-                do_resize=False,
-                do_rescale=False,
-                return_tensors="pt",
-            ).pixel_values 
-
-            image_embeddings = pipeline._encode_image(images, device, 1, False)
-            batch['image_embeddings'] = image_embeddings
-
-            for k, v in batch.items(): batch[k] = v[0]
-            torch.save(batch, full_out_path)
-            del pixel_values
-            del batch
-
-            # We do this to avoid fragmentation from casting latents between devices.
-            torch.cuda.empty_cache()
-    else:
-        cache_save_dir = cached_latent_dir
-        
-
-    return torch.utils.data.DataLoader(
-        CachedDataset(cache_dir=cache_save_dir), 
-        batch_size=train_batch_size, 
-        shuffle=shuffle,
-        num_workers=0
-    ) 
 
 def unet_and_text_g_c(unet, text_encoder, unet_enable, text_enable):
     if unet_enable:
@@ -275,6 +164,16 @@ def param_optim(model, condition, extra_params=None, is_lora=False, negation=Non
     }
     
 
+def negate_params(name, negation):
+    # We have to do this if we are co-training with LoRA.
+    # This ensures that parameter groups aren't duplicated.
+    if negation is None: return False
+    for n in negation:
+        if n in name and 'temp' not in name:
+            return True
+    return False
+
+
 def create_optim_params(name='param', params=None, lr=5e-6, extra_params=None):
     params = {
         "name": name, 
@@ -287,44 +186,14 @@ def create_optim_params(name='param', params=None, lr=5e-6, extra_params=None):
     
     return params
 
-def negate_params(name, negation):
-    # We have to do this if we are co-training with LoRA.
-    # This ensures that parameter groups aren't duplicated.
-    if negation is None: return False
-    for n in negation:
-        if n in name and 'temp' not in name:
-            return True
-    return False
-
-
 def create_optimizer_params(model_list, lr):
     import itertools
     optimizer_params = []
 
     for optim in model_list:
         model, condition, extra_params, is_lora, negation = optim.values()
-        # Check if we are doing LoRA training.
-        if is_lora and condition and isinstance(model, list): 
-            params = create_optim_params(
-                params=itertools.chain(*model), 
-                extra_params=extra_params
-            )
-            optimizer_params.append(params)
-            continue
-            
-        if is_lora and  condition and not isinstance(model, list):
-            for n, p in model.named_parameters():
-                if 'lora' in n:
-                    params = create_optim_params(n, p, lr, extra_params)
-                    optimizer_params.append(params)
-            continue
-
-        # If this is true, we can train it.
-        if condition:
-            for n, p in model.named_parameters():
-                should_negate = 'lora' in n and not is_lora
-                if should_negate: continue
-
+        for n, p in model.named_parameters():
+            if p.requires_grad:
                 params = create_optim_params(n, p, lr, extra_params)
                 optimizer_params.append(params)
     
@@ -434,9 +303,6 @@ def save_pipe(
         text_encoder, 
         vae, 
         output_dir,
-        lora_manager: LoraHandler,
-        unet_target_replace_module=None,
-        text_target_replace_module=None,
         is_checkpoint=False,
         save_pretrained_model=True
     ):
@@ -447,32 +313,17 @@ def save_pipe(
     else:
         save_path = output_dir
 
-    # Save the dtypes so we can continue training at the same precision.
-    u_dtype, t_dtype, v_dtype = unet.dtype, text_encoder.dtype, vae.dtype 
-
-   # Copy the model without creating a reference to it. This allows keeping the state of our lora training if enabled.
-    unet_save = copy.deepcopy(unet.cpu())
-    text_encoder_save = copy.deepcopy(text_encoder.cpu())
-
-    unet_out = copy.deepcopy(accelerator.unwrap_model(unet_save, keep_fp32_wrapper=False))
-    text_encoder_out = copy.deepcopy(accelerator.unwrap_model(text_encoder_save, keep_fp32_wrapper=False))
-
+    unet_out = copy.deepcopy(unet)
     pipeline = StableVideoDiffusionPipeline.from_pretrained(
         path, unet=unet_out).to(torch_dtype=torch.float32)
-    
+
     if save_pretrained_model:
         pipeline.save_pretrained(save_path)
-
-    if is_checkpoint:
-        unet, text_encoder = accelerator.prepare(unet, text_encoder)
-        models_to_cast_back = [(unet, u_dtype), (text_encoder, t_dtype), (vae, v_dtype)]
-        [x[0].to(accelerator.device, dtype=x[1]) for x in models_to_cast_back]
 
     logger.info(f"Saved model at {save_path} on step {global_step}")
     
     del pipeline
     del unet_out
-    del text_encoder_out
     torch.cuda.empty_cache()
     gc.collect()
 
@@ -493,39 +344,45 @@ def prompt_image(image, processor, encoder):
     #inputs = encoder(image).last_hidden_state.to(encoder.dtype)
     return inputs
     
-def finetune_unet(pipeline, batch, use_offset_noise,
+def finetune_unet(accelerator, pipeline, batch, use_offset_noise,
     rescale_schedule, offset_noise_strength, unet, motion_mask, 
-    P_mean=0.7, P_std=1.6, noise_aug_strength=0.02):
+    P_mean=0.7, P_std=1.6):
     pipeline.vae.eval()
     pipeline.image_encoder.eval()
+    device = unet.device
+    dtype = pipeline.vae.dtype
     vae = pipeline.vae
-    device = vae.device
     # Convert videos to latent space
-    pixel_values = batch["pixel_values"]
+    pixel_values = batch['pixel_values']
     bsz, num_frames = pixel_values.shape[:2]
-    frames = rearrange(pixel_values, 'b f c h w-> (b f) c h w')
-    latents = vae.encode(frames).latent_dist.mode()
+
+    frames = rearrange(pixel_values, 'b f c h w-> (b f) c h w').to(dtype)
+    latents = vae.encode(frames).latent_dist.mode() * vae.config.scaling_factor
     latents = rearrange(latents, '(b f) c h w-> b f c h w', b=bsz)
-    latents = latents * vae.config.scaling_factor
+
+    # enocde image latent
+    image = pixel_values[:,0].to(dtype)
+    noise_aug_strength = math.exp(random.normalvariate(mu=-3, sigma=0.5))
+    image = image + noise_aug_strength * torch.randn_like(image)
+    image_latent = vae.encode(image).latent_dist.mode() * vae.config.scaling_factor
+
     if motion_mask:
-        mask = batch["mask"]
-        mask = mask.div(255).to(latents.device)
+        mask = batch['mask']
+        mask = mask.div(255)
         h, w = latents.shape[-2:]
         mask = T.Resize((h, w), antialias=False)(mask)
         mask[mask<0.5] = 0
         mask[mask>=0.5] = 1
-        mask = rearrange(mask, 'b h w -> b 1 1 h w')
-        freeze = repeat(latents[:,0], 'b c h w -> b f c h w', f=num_frames)
-        latents = freeze * (1-mask)  + latents * mask
+        mask = repeat(mask, 'b h w -> b f 1 h w', f=num_frames).detach().clone()
+        mask[:,0] = 0
+        freeze = repeat(image_latent, 'b c h w -> b f c h w', f=num_frames)
+        condition_latent = latents * (1-mask) + freeze * mask
+    else:
+        condition_latent = repeat(image_latent, 'b c h w->b f c h w',f=num_frames)
 
-    # enocde image latent
-    image = pixel_values[:,0]
-    image = image + noise_aug_strength * torch.randn_like(image)
-    image_latents = vae.encode(image).latent_dist.mode()
-    image_latents = repeat(image_latents, 'b c h w->b f c h w',f=num_frames)
 
-    # vae image to clip image
-    images = _resize_with_antialiasing(pixel_values[:,0], (224, 224))
+    pipeline.image_encoder.to(device, dtype=dtype)
+    images = _resize_with_antialiasing(pixel_values[:,0], (224, 224)).to(dtype)
     images = (images + 1.0) / 2.0 # [-1, 1] -> [0, 1]
     images = pipeline.feature_extractor(
         images=images,
@@ -536,8 +393,12 @@ def finetune_unet(pipeline, batch, use_offset_noise,
         return_tensors="pt",
     ).pixel_values 
     image_embeddings = pipeline._encode_image(images, device, 1, False)
-    negative_image_embeddings = torch.zeros_like(image_embeddings)
 
+    encoder_hidden_states = image_embeddings
+    uncond_hidden_states = torch.zeros_like(image_embeddings)
+    
+    if random.random() < 0.15: 
+        encoder_hidden_states = uncond_hidden_states
     # Add noise to the latents according to the noise magnitude at each timestep
     # (this is the forward diffusion process) #[bsz, f, c, h , w]
     rnd_normal = torch.randn([bsz, 1, 1, 1, 1], device=device)
@@ -545,14 +406,13 @@ def finetune_unet(pipeline, batch, use_offset_noise,
     c_skip = 1 / (sigma**2 + 1)
     c_out =  -sigma / (sigma**2 + 1) ** 0.5
     c_in = 1 / (sigma**2 + 1) ** 0.5
-    c_noise = sigma.log() / 4
+    c_noise = (sigma.log() / 4).reshape([bsz])
     loss_weight = (sigma ** 2 + 1) / sigma ** 2
 
     noisy_latents = latents + torch.randn_like(latents) * sigma
-    input_latents = c_in * noisy_latents
-    input_latents = torch.cat([input_latents, image_latents], dim=2)
+    input_latents = torch.cat([c_in * noisy_latents, 
+        condition_latent/vae.config.scaling_factor], dim=2)
     if motion_mask:
-        mask = repeat(mask, 'b 1 1 h w -> b f 1 h w', f=num_frames)
         input_latents = torch.cat([mask, input_latents], dim=2)
 
     motion_bucket_id = 127
@@ -561,21 +421,14 @@ def finetune_unet(pipeline, batch, use_offset_noise,
         noise_aug_strength, image_embeddings.dtype, bsz, 1, False)
     added_time_ids = added_time_ids.to(device)
 
-    losses = []
-    if random.random() < 0.15:
-        encoder_hidden_states = negative_image_embeddings
-    else:
-        encoder_hidden_states = image_embeddings
-    model_pred = unet(input_latents, c_noise.reshape([bsz]), encoder_hidden_states=encoder_hidden_states, 
-        added_time_ids=added_time_ids,).sample
+    loss = 0
+
+    accelerator.wait_for_everyone()
+    model_pred = unet(input_latents, c_noise, encoder_hidden_states=encoder_hidden_states, added_time_ids=added_time_ids).sample
     predict_x0 = c_out * model_pred + c_skip * noisy_latents 
-    loss = ((predict_x0 - latents)**2 * loss_weight).mean()
-    '''
+    loss += ((predict_x0 - latents)**2 * loss_weight).mean()
     if motion_mask:
-        loss += F.mse_loss(predict_x0*(1-mask), freeze*(1-mask))
-    ''' 
-    losses.append(loss)
-    loss = losses[0] if len(losses) == 1 else losses[0] + losses[1] 
+        loss += F.mse_loss(predict_x0*(1-mask), condition_latent*(1-mask))
     return loss
 
 
@@ -589,7 +442,6 @@ def main(
     shuffle: bool = True,
     validation_steps: int = 100,
     trainable_modules: Tuple[str] = None, # Eg: ("attn1", "attn2")
-    trainable_text_modules: Tuple[str] = None, # Eg: ("all"), this also applies to trainable_modules
     extra_unet_params = None,
     extra_text_encoder_params = None,
     train_batch_size: int = 1,
@@ -614,26 +466,13 @@ def main(
     enable_xformers_memory_efficient_attention: bool = True,
     enable_torch_2_attn: bool = False,
     seed: Optional[int] = None,
-    train_text_encoder: bool = False,
     use_offset_noise: bool = False,
     rescale_schedule: bool = False,
     offset_noise_strength: float = 0.1,
     extend_dataset: bool = False,
     cache_latents: bool = False,
     cached_latent_dir = None,
-    lora_version: LORA_VERSIONS = LORA_VERSIONS[0],
-    save_lora_for_webui: bool = False,
-    only_lora_for_webui: bool = False,
-    lora_bias: str = 'none',
-    use_unet_lora: bool = False,
-    use_text_lora: bool = False,
-    unet_lora_modules: Tuple[str] = ["ResnetBlock2D"],
-    text_encoder_lora_modules: Tuple[str] = ["CLIPEncoderLayer"],
     save_pretrained_model: bool = True,
-    lora_rank: int = 16,
-    lora_path: str = '',
-    lora_unet_dropout: float = 0.1,
-    lora_text_dropout: float = 0.1,
     logger_type: str = 'tensorboard',
     motion_mask=False,
     **kwargs
@@ -677,43 +516,23 @@ def main(
     # Initialize the optimizer
     optimizer_cls = get_optimizer(use_8bit_adam)
 
-    # Use LoRA if enabled.  
-    lora_manager = LoraHandler(
-        version=lora_version, 
-        use_unet_lora=use_unet_lora,
-        use_text_lora=use_text_lora,
-        save_for_webui=save_lora_for_webui,
-        only_for_webui=only_lora_for_webui,
-        unet_replace_modules=unet_lora_modules,
-        text_encoder_replace_modules=text_encoder_lora_modules,
-        lora_bias=lora_bias
-    )
-
-    unet_lora_params, unet_negation = lora_manager.add_lora_to_model(
-        use_unet_lora, unet, lora_manager.unet_replace_modules, lora_unet_dropout, lora_path, r=lora_rank) 
-
-    text_encoder_lora_params, text_encoder_negation = lora_manager.add_lora_to_model(
-        use_text_lora, text_encoder, lora_manager.text_encoder_replace_modules, lora_text_dropout, lora_path, r=lora_rank) 
-
     # Create parameters to optimize over with a condition (if "condition" is true, optimize it)
     extra_unet_params = extra_unet_params if extra_unet_params is not None else {}
     extra_text_encoder_params = extra_unet_params if extra_unet_params is not None else {}
 
     trainable_modules_available = trainable_modules is not None
-    trainable_text_modules_available = (train_text_encoder and trainable_text_modules is not None)
-    
+
+    # Unfreeze UNET Layers
+    if trainable_modules_available:
+        unet.train()
+        handle_trainable_modules(
+            unet, 
+            trainable_modules, 
+            is_enabled=True,
+        )
+
     optim_params = [
-        param_optim(unet, trainable_modules_available, extra_params=extra_unet_params, negation=unet_negation),
-        param_optim(text_encoder, trainable_text_modules_available, 
-                        extra_params=extra_text_encoder_params, 
-                        negation=text_encoder_negation
-                   ),
-        param_optim(text_encoder_lora_params, use_text_lora, is_lora=True, 
-                        extra_params={**{"lr": learning_rate}, **extra_unet_params}
-                    ),
-        param_optim(unet_lora_params, use_unet_lora, is_lora=True, 
-                        extra_params={**{"lr": learning_rate}, **extra_text_encoder_params}
-                    )
+        param_optim(unet, trainable_modules_available, extra_params=extra_unet_params)
     ]
 
     params = create_optimizer_params(optim_params, learning_rate)
@@ -768,21 +587,6 @@ def main(
         shuffle=shuffle
     )
 
-    # Latents caching
-    cached_data_loader = handle_cache_latents(
-        cache_latents, 
-        output_dir,
-        train_dataloader, 
-        train_batch_size, 
-        pipeline,
-        accelerator.device,
-        cached_latent_dir
-    ) 
-
-    if cached_data_loader is not None: 
-        train_dataloader = cached_data_loader
-        text_encoder.to("cpu")
-
     # Prepare everything with our `accelerator`.
     unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         unet, 
@@ -807,12 +611,6 @@ def main(
     models_to_cast = [text_encoder, vae]
     cast_to_gpu_and_type(models_to_cast, accelerator.device, weight_dtype)
     
-    # We need to recalculate our total training steps as the size of the training dataloader may have changed.
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / gradient_accumulation_steps)
-
-    # Afterwards we recalculate our number of training epochs
-    num_train_epochs = math.ceil(max_train_steps / num_update_steps_per_epoch)
-
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
@@ -820,6 +618,8 @@ def main(
 
     # Train!
     total_batch_size = train_batch_size * accelerator.num_processes * gradient_accumulation_steps
+    num_train_epochs = math.ceil(max_train_steps * gradient_accumulation_steps / len(train_dataloader) / accelerator.num_processes)
+
 
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {len(train_dataset)}")
@@ -834,35 +634,7 @@ def main(
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(global_step, max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
-    
-    # Check if we are training the text encoder
-    text_trainable = (train_text_encoder or lora_manager.use_text_lora)
-    
-    # Unfreeze UNET Layers
-    unet.train()
-    handle_trainable_modules(
-        unet, 
-        trainable_modules, 
-        is_enabled=True,
-        negation=unet_negation
-    )
-
-
-    # Enable text encoder training
-    if text_trainable:
-        text_encoder.train()
-
-        if lora_manager.use_text_lora: 
-            text_encoder.text_model.embeddings.requires_grad_(True)
-
-        if global_step == 0 and train_text_encoder:
-            handle_trainable_modules(
-                text_encoder, 
-                trainable_modules=trainable_text_modules,
-                negation=text_encoder_negation
-        )
-        cast_to_gpu_and_type([text_encoder], accelerator.device, torch.float32)
-            
+     
     # *Potentially* Fixes gradient checkpointing training.
     # See: https://github.com/prigoyal/pytorch_memonger/blob/master/tutorial/Checkpointing_for_PyTorch_models.ipynb
     if kwargs.get('eval_train', False):
@@ -881,7 +653,7 @@ def main(
             
             with accelerator.accumulate(unet) ,accelerator.accumulate(text_encoder):
                 with accelerator.autocast():
-                    loss = finetune_unet(pipeline, batch, use_offset_noise, 
+                    loss = finetune_unet(accelerator, pipeline, batch, use_offset_noise, 
                         rescale_schedule, offset_noise_strength, unet, motion_mask)
                 device = loss.device 
                 # Gather the losses across all processes for logging (if we use distributed training).
@@ -890,12 +662,7 @@ def main(
 
                 # Backpropagate
                 accelerator.backward(loss)
-
-                if any([train_text_encoder, use_text_lora]):
-                    params_to_clip = list(unet.parameters()) + list(text_encoder.parameters())
-                else:
-                    params_to_clip = unet.parameters()
-
+                params_to_clip = unet.parameters()
                 accelerator.clip_grad_norm_(params_to_clip, max_grad_norm)
             
                 optimizer.step()
@@ -909,18 +676,15 @@ def main(
                 accelerator.log({"train_loss": train_loss}, step=global_step)
                 train_loss = 0.0
             
-                if global_step % checkpointing_steps == 0:
+                if global_step % checkpointing_steps == 0 and accelerator.is_main_process:
                     save_pipe(
                         pretrained_model_path, 
                         global_step, 
                         accelerator, 
-                        unet, 
-                        text_encoder, 
+                        accelerator.unwrap_model(unet),
+                        accelerator.unwrap_model(text_encoder), 
                         vae, 
                         output_dir, 
-                        lora_manager,
-                        unet_lora_modules,
-                        text_encoder_lora_modules,
                         is_checkpoint=True,
                         save_pretrained_model=save_pretrained_model
                     )
@@ -936,15 +700,6 @@ def main(
                             eval(pipeline, vae_processor, validation_data, out_file, global_step)
                             logger.info(f"Saved a new sample to {out_file}")
 
-                    unet_and_text_g_c(
-                        unet, 
-                        text_encoder, 
-                        gradient_checkpointing, 
-                        text_encoder_gradient_checkpointing
-                    )
-
-                    lora_manager.deactivate_lora_train([unet, text_encoder], False)    
-
             logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             accelerator.log({"training_loss": loss.detach().item()}, step=step)
             progress_bar.set_postfix(**logs)
@@ -959,13 +714,10 @@ def main(
                 pretrained_model_path, 
                 global_step, 
                 accelerator, 
-                unet, 
-                text_encoder, 
+                accelerator.unwrap_model(unet),
+                accelerator.unwrap_model(text_encoder), 
                 vae, 
                 output_dir, 
-                lora_manager,
-                unet_lora_modules,
-                text_encoder_lora_modules,
                 is_checkpoint=False,
                 save_pretrained_model=save_pretrained_model
         )     
@@ -1036,8 +788,9 @@ def eval(pipeline, vae_processor, validation_data, out_file, index, forward_t=25
             ).frames[0]
     
     if preview:
-        imageio.mimwrite(out_file, video_frames, fps=validation_data.fps, loop=0)
-        imageio.mimwrite(out_file.replace('.gif', '.mp4'), video_frames, fps=validation_data.fps)
+        fps = validation_data.get('fps', 8)
+        imageio.mimwrite(out_file, video_frames, duration=int(1000/fps), loop=0)
+        imageio.mimwrite(out_file.replace('.gif', '.mp4'), video_frames, fps=fps)
     return 0
 
 def main_eval(

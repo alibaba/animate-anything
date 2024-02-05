@@ -2,7 +2,6 @@ accelerate==0.21.0
 torch==2.0.0
 torchvision
 diffusers==0.24.0
-git+https://github.com/microsoft/LoRA
 transformers==4.36.2
 einops
 decord
