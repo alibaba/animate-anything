@@ -61,7 +61,7 @@ python train.py --config output/latent/{download_model}/config.yaml --eval valid
 ![](docs/qingming2.gif)
 
 
-User can ajust the motion strength by using the mask motion model:
+User can adjust the motion strength by using the mask motion model:
 ```bash
 python train.py --config output/latent/{download_model}/
 config.yaml --eval validation_data.prompt_image=example/qingming2.jpg validation_data.prompt='Peoples are walking on the street.' validation_data.mask=example/qingming2_label.jpg validation_data.strength=5
@@ -131,11 +131,11 @@ python train_svd.py --config example/train_svd.yaml pretrained_model_path=<svd_m
 ```
 
 ### Multiple GPUs training
-I strongly recommend use multiple GPUs training with Accelerator, which will largely decrease the VRAM requirement. Please first config the accelerator with deepseed. An example config is located in example/deepsepped.yaml.
+I strongly recommend use multiple GPUs training with Accelerator, which will largely decrease the VRAM requirement. Please first config the accelerator with deepspeed. An example config is located in example/deepspeed.yaml.
 
 And then replace 'python train_xx.py ...' commands above with 'accelerate launch train_xx.py ...', for example:
 ```
-accelerate launch --config_file example/deepseepd.yaml train_svd.py --config example/train_svd_mask.yaml pretrained_model_path=<download_model>
+accelerate launch --config_file example/deepspeed.yaml train_svd.py --config example/train_svd_mask.yaml pretrained_model_path=<download_model>
 ```
 
 
