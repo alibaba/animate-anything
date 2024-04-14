@@ -1,21 +1,63 @@
-# AnimateAnything: Fine Grained Open Domain Image Animation with Motion Guidance
-Project page: https://animationai.github.io/AnimateAnything/
+<div align="center">
+<h2><center>👉 AnimateAnything: Fine Grained Open Domain Image Animation with Motion Guidance</h2>
 
-Arxiv Link: https://arxiv.org/abs/2311.12886
+[Zuozhuo Dai](), [Zhenghao Zhang](), [Menghao Li](), [Junchao Liao](), [Siyu Zhu](), [Long Qin](), [Weizhi Wang]()
+
+<a href='https://arxiv.org/abs/2311.12886'><img src='https://img.shields.io/badge/ArXiv-2311.12886-red'></a> 
+<a href='https://animationai.github.io/AnimateAnything/'><img src='https://img.shields.io/badge/Project-Page-Blue'></a>  ![views](https://visitor-badge.laobi.icu/badge?page_id=alibaba.animate-anything&left_color=gray&right_color=red)
+<!-- views since 24.04 -->
+</div>
+
+## Showcases
 
 https://github.com/alibaba/animate-anything/assets/1107525/e2659674-c813-402a-8a85-e620f0a6a454
 
-| Reference Image  | Motion Mask | GIF |
-| ------------- | ------------- | -------- |
-| ![Input image](docs/fish.jpg)  | ![](docs/fish_mask.png) | ![](docs/fish.gif) The fish and tadpoles are playing.|
+<table>
+  <tr>
+    <th>Input Image with Mask</th>
+    <th>Prompt</th>
+    <th>Result</th>
+  </tr>
+  <tr>
+    <td><img src="docs/sample_1.png" alt="Input image" width="280" height="210" /></td>
+    <td align="center">
+    Barbie watching the camera with a smiling face.</td>
+    <td><img src="docs/sample_1.gif" alt="Result" width="280" height="210" /></td>
+  </tr>
+  <tr>
+    <td><img src="docs/sample_2.png" alt="Input image" width="280" height="280" /></td>
+    <td align="center">
+    The cloak swaying in the wind.</td>
+    <td><img src="docs/sample_2.gif" alt="Result" width="280" height="280" /></td>
+  </tr>
+  <tr>
+    <td><img src="docs/sample_3.png" alt="Input image" width="280" height="280" /></td>
+    <td align="center">
+    A red fish is swimming.</td>
+    <td><img src="docs/sample_3.gif" alt="Result" width="280" height="280" /></td>
+  </tr>
+</table>
 
-## News
+<!-- | Reference Image  | Motion Mask | GIF |
+| ------------- | ------------- | -------- |
+| ![Input image](docs/fish.jpg)  | ![](docs/fish_mask.png) | ![](docs/fish.gif) The fish and tadpoles are playing.| -->
+
+## Framework
+![framework](docs/framework.png)
+
+## News 🔥
 **2024.2.5**: Support multiple GPUs training with Accelerator DeepSpeed. Config DeepSpeed zero_stage 2 and offload_optimizer_device cpu, you can do full finetuning animate-anything with 4x16G V100 GPUs and SVD with 4x24G A10 GPUs now.
 
-**2023.12.27**: Support finetuning based on SVD model. Update SVD based animate_anything_svd_v1.0
+**2023.12.27**: Support finetuning based on SVD (stable video diffusion) model. Update SVD based animate_anything_svd_v1.0
 
 **2023.12.18**: Update model to animate_anything_512_v1.02
 
+## Features Planned
+- 💥 Enhanced prompt-following: generating long-detailed captions using LLaVA.
+- 💥 Replace the U-Net with DiffusionTransformer (DiT) as the base model.
+- 💥 Variable resolutions.
+- 💥 Support Huggingface Demo / Google Colab.
+- etc.
 
 ## Getting Started
 This repository is based on [Text-To-Video-Finetuning](https://github.com/ExponentialML/Text-To-Video-Finetuning.git).
@@ -43,7 +85,7 @@ Please download the [pretrained model](https://cloudbook-public-production.oss-c
 python train.py --config output/latent/{download_model}/config.yaml --eval validation_data.prompt_image=example/barbie2.jpg validation_data.prompt='A cartoon girl is talking.'
 ```
 
-To control the motion area, we can use the labelme to generate a binary mask. First, we use labelme to drag the polygon the reference image.
+To control the motion area, we can use the labelme to generate a binary mask. First, we use labelme to draw the polygon for the reference image.
 
 ![](docs/labelme.png)
 
@@ -79,7 +121,7 @@ python inference_video.py
 
 ### Using Captions
 
-You can use caption files when training video. Simply place the videos into a folder and create a json with captions like this:
+You can use caption files when training with video. Simply place the videos into a folder and create a json with captions like this:
 
 ```
 [
