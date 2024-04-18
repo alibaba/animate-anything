@@ -180,6 +180,15 @@ And then replace 'python train_xx.py ...' commands above with 'accelerate launch
 accelerate launch --config_file example/deepspeed.yaml train_svd.py --config example/train_svd_mask.yaml pretrained_model_path=<download_model>
 ```
 
+### SVD video2video
+We now release the finetuned vid2vid SVD model, you can try it via the gradio UI.
+
+Please download the [vid2vid_SVD model](https://cloudbook-public-production.oss-cn-shanghai.aliyuncs.com/animation/animate_anything_svd_v1.01.tar) and extract it to output/svd/{download_model} and then run the command:
+```
+python app_svd.py --config example/train_svd_v2v.yaml pretrained_model_path=output/svd/{download_model}
+```
+
+We provide several examples in the svd_video2video_examples directory.
 
 ## Bibtex
 Please cite this paper if you find the code is useful for your research:

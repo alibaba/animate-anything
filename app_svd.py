@@ -12,8 +12,9 @@ import torchvision.transforms as T
 import imageio
 
 from diffusers import StableVideoDiffusionPipeline
-from utils.common import tensor_to_vae_latent, DDPM_forward_timesteps
-from models.pipeline import MaskStableVideoDiffusionPipeline
+from models.pipeline import TextStableVideoDiffusionPipeline
+from einops import rearrange, repeat
+from utils.common import read_video
 
 css = """
 .toolbutton {
@@ -33,14 +34,14 @@ class AnimateController:
         device=torch.device("cuda")
         self.validation_data = validation_data
         self.output_dir = output_dir
-        # self.pipeline = StableVideoDiffusionPipeline.from_pretrained(pretrained_model_path,
-        #     torch_dtype=torch.float16, variant="fp16").to(device)
-        self.pipeline = StableVideoDiffusionPipeline.from_pretrained(pretrained_model_path).to(device)
+        self.pipeline = StableVideoDiffusionPipeline.from_pretrained(pretrained_model_path, torch_dtype=torch.float16, variant="fp16").to(device)
+        #self.pipeline = StableVideoDiffusionPipeline.from_pretrained(pretrained_model_path).to(device)
         self.sample_idx = 0
 
     def animate(
         self,
         init_img,
+        input_video,
         sample_step_slider,
         seed_textbox,
         fps_textbox,
@@ -55,54 +56,80 @@ class AnimateController:
             torch.seed()
         seed = torch.initial_seed()
 
-        vae = self.pipeline.vae
-        diffusion_scheduler = self.pipeline.scheduler
-        validation_data = self.validation_data
-        validation_data.fps = int(fps_textbox)
-        validation_data.num_frames = int(num_frames_textbox)
-        validation_data.motion_bucket_id = int(motion_bucket_id_slider)
-        vae_processor =  VaeImageProcessor()
-
-        device = vae.device
-        dtype = vae.dtype
-
-        pimg = Image.fromarray(init_img["background"]).convert('RGB')
-        width, height = pimg.size
-        scale = math.sqrt(width*height / (validation_data.height*validation_data.width))
-        block_size=64
-        height = round(height/scale/block_size)*block_size
-        width = round(width/scale/block_size)*block_size
-        input_image = vae_processor.preprocess(pimg, height, width)
-        input_image = input_image.unsqueeze(0).to(dtype).to(device)
-        input_image_latents = tensor_to_vae_latent(input_image, vae)
-        np_mask = init_img["layers"][0][:,:,3]
-        np_mask[np_mask!=0] = 255
-        if np_mask.sum() == 0:
-            np_mask[:] = 255
-
-
-        b, c, _, h, w = input_image_latents.shape
-        initial_latents, timesteps = DDPM_forward_timesteps(input_image_latents,
-            sample_step_slider, validation_data.num_frames, diffusion_scheduler)
-        mask = T.ToTensor()(np_mask).to(dtype).to(device)
-        b, c, f, h, w = initial_latents.shape
-        mask = T.Resize([h, w], antialias=False)(mask)
-
-        motion_mask = self.pipeline.unet.config.in_channels == 9
-
         with torch.no_grad():
+            vae = self.pipeline.vae
+            validation_data = self.validation_data
+            validation_data.fps = int(fps_textbox)
+            validation_data.num_frames = int(num_frames_textbox)
+            validation_data.motion_bucket_id = int(motion_bucket_id_slider)
+            vae_processor = VaeImageProcessor()
+
+            device = vae.device
+            dtype = vae.dtype
+
+            f = validation_data.num_frames
+            pimg = Image.fromarray(init_img["background"]).convert('RGB')
+            np_mask = init_img["layers"][0][:,:,3]
+            np_mask[np_mask!=0] = 255
+            if np_mask.sum() == 0:
+                np_mask[:] = 255
+            if input_video is not None:
+                frames = read_video(input_video)
+                frames = [Image.fromarray(f) for f in frames]
+                pimg = frames[0]
+                width, height = pimg.size
+                scale = math.sqrt(width*height / (validation_data.height*validation_data.width))
+                block_size=64
+                height = round(height/scale/block_size)*block_size
+                width = round(width/scale/block_size)*block_size
+                f = len(frames)
+                
+                latents = []
+                for frame in frames:
+                    input_image = vae_processor.preprocess(frame, height, width)
+                    input_image = input_image.to(dtype).to(device)
+                    input_image_latent = vae.encode(input_image).latent_dist.mode() * vae.config.scaling_factor
+                    latents.append(input_image_latent.unsqueeze(1))
+                latents = torch.cat(latents, dim=1)
+            else:
+                width, height = pimg.size
+                scale = math.sqrt(width*height / (validation_data.height*validation_data.width))
+                block_size=64
+                height = round(height/scale/block_size)*block_size
+                width = round(width/scale/block_size)*block_size
+                input_image = vae_processor.preprocess(pimg, height, width)
+                input_image = input_image.to(dtype).to(device)
+                input_image_latent = vae.encode(input_image).latent_dist.mode() * vae.config.scaling_factor
+                latents = repeat(input_image_latent, 'b c h w->b f c h w', f=f)
+        
+            b, f, c, h, w = latents.shape
+
+            mask = T.ToTensor()(np_mask).to(dtype).to(device)
+            mask = T.Resize([h, w], antialias=False)(mask)
+            mask = repeat(mask, 'b h w -> b f 1 h w', f=f).detach().clone()
+            mask[:,0] = 0
+            freeze = repeat(latents[:,0], 'b c h w -> b f c h w', f=f)
+            condition_latents = latents * (1-mask) + freeze * mask
+            condition_latents = condition_latents/vae.config.scaling_factor
+
+            motion_mask = self.pipeline.unet.config.in_channels == 9
+            decode_chunk_size=validation_data.get("decode_chunk_size", 7)
+            fps=validation_data.get("fps", 7)
+            motion_bucket_id=validation_data.get("motion_bucket_id", 127)
             if motion_mask:
-                video_frames = MaskStableVideoDiffusionPipeline.__call__(
+                video_frames = TextStableVideoDiffusionPipeline.__call__(
                     self.pipeline,
                     image=pimg,
                     width=width,
                     height=height,
                     num_frames=validation_data.num_frames,
                     num_inference_steps=validation_data.num_inference_steps,
-                    decode_chunk_size=validation_data.decode_chunk_size,
-                    fps=validation_data.fps,
-                    motion_bucket_id=validation_data.motion_bucket_id,
-                    mask=mask
+                    decode_chunk_size=decode_chunk_size,
+                    fps=fps,
+                    motion_bucket_id=motion_bucket_id,
+                    mask=mask,
+                    condition_type="image",
+                    condition_latent=condition_latents
                 ).frames[0]
             else:
                 video_frames = self.pipeline(
@@ -118,10 +145,27 @@ class AnimateController:
 
         save_sample_path = os.path.join(
             self.output_dir, f"{self.sample_idx}.mp4")
-        imageio.mimwrite(save_sample_path, video_frames, fps=validation_data.fps)
+        Image.fromarray(np_mask).save(os.path.join(
+            self.output_dir, f"{self.sample_idx}_label.jpg"))
+        imageio.mimwrite(save_sample_path, video_frames, fps=7)
         self.sample_idx += 1
         return save_sample_path
 
+import cv2
+
+def get_video_info(video_path):
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return None
+
+    length = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    
+    return length
+
+def update_num_frames(input_video, num_frames_textbox):
+    frame_count = get_video_info(input_video)
+    return frame_count or 14
 
 def ui(controller):
     with gr.Blocks(css=css) as demo:
@@ -141,7 +185,8 @@ def ui(controller):
                 init_img = gr.ImageMask(label='Input Image', brush=gr.Brush(default_size=100))
                 generate_button = gr.Button(
                     value="Generate", variant='primary')
-
+            input_video = gr.Video(label="Input video", interactive=True)
+            
             result_video = gr.Video(
                 label="Generated Animation", interactive=False)
 
@@ -150,6 +195,12 @@ def ui(controller):
                 fps_textbox = gr.Number(label="Fps", value=7, minimum=1)
                 num_frames_textbox = gr.Number(label="Num frames", value=14, minimum=1, maximum=78)
 
+            input_video.upload(
+                fn=update_num_frames,
+                inputs=[input_video],
+                outputs=[num_frames_textbox]
+            )
+            
             motion_bucket_id_slider = gr.Slider(
                 label='motion_bucket_id',
                 value=127, step=1, minimum=0, maximum=511)
@@ -173,6 +224,7 @@ def ui(controller):
             fn=controller.animate,
             inputs=[
                 init_img,
+                input_video,
                 sample_step_slider,
                 seed_textbox,
                 fps_textbox,
@@ -205,4 +257,4 @@ if __name__ == "__main__":
     demo.queue(max_size=10)
     demo.launch(server_name=args.server_name,
                 server_port=args.port, max_threads=40,
-                allowed_paths=['example/barbie2.jpg'])
+                )
