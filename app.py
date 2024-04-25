@@ -230,4 +230,5 @@ if __name__ == "__main__":
     demo.queue(max_size=10)
     demo.launch(server_name=args.server_name,
                 server_port=args.port, max_threads=40,
-                allowed_paths=['example/barbie2.jpg'])
+                allowed_paths=['example/barbie2.jpg'],
+                share=True)
