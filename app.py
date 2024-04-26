@@ -215,10 +215,9 @@ if __name__ == "__main__":
     parser.add_argument('--config', type=str, default='example/config/base.yaml')
     parser.add_argument('--server-name', type=str, default='0.0.0.0')
     parser.add_argument('--port', type=int, default=7860)
-    parser.add_argument('--share', action='store_true')
+    parser.add_argument('--share', action='store_true', default=False)
     parser.add_argument('--local-debug', action='store_true')
     parser.add_argument('--save-path', default='samples')
-    parser.add_argument('--share', action='store_true', default=False)
 
     args, unknownargs = parser.parse_known_args()
     LOCAL_DEBUG = args.local_debug
