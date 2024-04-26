@@ -218,6 +218,7 @@ if __name__ == "__main__":
     parser.add_argument('--share', action='store_true')
     parser.add_argument('--local-debug', action='store_true')
     parser.add_argument('--save-path', default='samples')
+    parser.add_argument('--share', action='store_true', default=False)
 
     args, unknownargs = parser.parse_known_args()
     LOCAL_DEBUG = args.local_debug
@@ -231,4 +232,4 @@ if __name__ == "__main__":
     demo.launch(server_name=args.server_name,
                 server_port=args.port, max_threads=40,
                 allowed_paths=['example/barbie2.jpg'],
-                share=True)
+                share=args.share)
