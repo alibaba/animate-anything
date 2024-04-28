@@ -162,7 +162,7 @@ python train.py --config example/train_mask_motion.yaml pretrained_model_path=<d
 ```
 
 ### Finetune Stable Video Diffusion:
-Stable Video Diffusion (SVD) img2vid model can generate high resolution videos. However, it does not have the text or motion mask control. You can finetune SVD with motioin mask guidance with the following commands and [pretrained model](https://cloudbook-public-production.oss-cn-shanghai.aliyuncs.com/animation/animate_anything_svd_v1.0.tar). This config requires around 80G GPU RAM.
+Stable Video Diffusion (SVD) img2vid model can generate high resolution videos. However, it does not have the text or motion mask control. You can finetune SVD with motioin mask guidance with the following commands and [pretrained SVD model](https://cloudbook-public-production.oss-cn-shanghai.aliyuncs.com/animation/animate_anything_svd_v1.0.tar). This config requires around 80G GPU RAM.
 ```
 python train_svd.py --config example/train_svd_mask.yaml pretrained_model_path=<download_model>
 ```
