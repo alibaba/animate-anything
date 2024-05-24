@@ -53,10 +53,14 @@ https://github.com/alibaba/animate-anything/assets/1107525/e2659674-c813-402a-8a
 **2023.12.18**: Update model to animate_anything_512_v1.02
 
 ## Features Planned
+- 💥 Transparent video generatinon. (Take a RGBA image as input and output animated RGBA videos)
+  - ✅ reproduce Transparent VAE encoder and decoder according to [LayerDiffuse](https://github.com/layerdiffusion/sd-forge-layerdiffuse).
+  - ✅ finetune 3D-Unet to support the basic RGBA-image-to-RGBA-video capability.
 - 💥 Enhanced prompt-following: generating long-detailed captions using LLaVA.
 - 💥 Replace the U-Net with DiffusionTransformer (DiT) as the base model.
 - 💥 Variable resolutions.
 - 💥 Support Huggingface Demo / Google Colab.
+  - ✅ support svd video2video Google Colab demo. See colab.ipynb.
 - etc.
 
 ## Getting Started

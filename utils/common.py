@@ -78,6 +78,12 @@ def read_video(video_path, frame_number=-1):
         frames.append(ref_frame)
     return frames
 
+def get_full_white_area_mask(frames):
+    ref_frame = frames[0] 
+    ref_gray = cv2.cvtColor(ref_frame, cv2.COLOR_BGR2GRAY)
+    total_mask = np.ones_like(ref_gray) * 255
+
+    return total_mask
 
 def get_moved_area_mask(frames, move_th=5, th=-1):
     ref_frame = frames[0] 
