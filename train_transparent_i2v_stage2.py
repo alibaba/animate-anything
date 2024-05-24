@@ -1,7 +1,7 @@
 """
 inference code:
 
-    input: rgba image, see #622 val_list = ["apple.png" ...]
+    input: rgba image, see #628 val_list = ["apple.png" ...]
         located at example/example_padded_rgba_pngs by default
 
     output: animated rgba videos, webp format
@@ -10,8 +10,14 @@ inference code:
         reference to example/layerdiffuse_stage2_384.yaml, 
         modify transparent_unet_pretrained_model_path, transparent_VAE_pretrained_model_path -> your downloaded model paths
 
+        please download pretrained transparent vae: https://cloudbook-public-daily.oss-cn-hangzhou.aliyuncs.com/animation/transparent_VAE.tar
+            , extract this tar, and then place it at transparent_VAE_pretrained_model_path
+
+        please download pretrained transparent unet: https://cloudbook-public-daily.oss-cn-hangzhou.aliyuncs.com/animation/transparent_unet.tar
+            , extract this tar, and then place it at transparent_unet_pretrained_model_path
+
         run "python train_transparent_i2v_stage2.py --config example/layerdiffuse_stage2_384.yaml --eval" 
-        results are saved at "output/stage_2_eval" by default
+        results will be saved at "output/stage_2_eval" by default
 
     Note: This is code in the early stages and may be subject to significant changes. The training code and dataset are not yet open-sourced.
 """
