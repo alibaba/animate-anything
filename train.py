@@ -288,7 +288,7 @@ def save_pipe(
     text_encoder_out = copy.deepcopy(text_encoder)
     vae_out = copy.deepcopy(vae)
 
-    pipeline = TextToVideoSDPipeline.from_pretrained(
+    pipeline = LatentToVideoPipeline.from_pretrained(
         path,
         unet=unet_out,
         text_encoder=text_encoder_out,
