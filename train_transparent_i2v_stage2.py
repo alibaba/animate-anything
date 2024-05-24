@@ -56,7 +56,7 @@ from diffusers.models.attention_processor import AttnProcessor2_0
 from diffusers.models.attention import BasicTransformerBlock
 
 from transformers import CLIPTextModel, CLIPTokenizer
-from utils.dataset_layerdiffuse_stage2 import CachedDataset
+
 from einops import rearrange, repeat
 import imageio
 
@@ -275,55 +275,6 @@ def cast_to_gpu_and_type(model_list, device, weight_dtype):
     for model in model_list:
         if model is not None: model.to(device, dtype=weight_dtype)
 
-def handle_cache_latents(
-        should_cache, 
-        output_dir, 
-        train_dataloader, 
-        train_batch_size, 
-        vae, 
-        cached_latent_dir=None,
-        shuffle=False
-    ):
-
-    # Cache latents by storing them in VRAM. 
-    # Speeds up training and saves memory by not encoding during the train loop.
-    if not should_cache: return None
-    vae.to('cuda', dtype=torch.float16)
-    vae.enable_slicing()
-    
-    cached_latent_dir = (
-        os.path.abspath(cached_latent_dir) if cached_latent_dir is not None else None 
-        )
-
-    if cached_latent_dir is None:
-        cache_save_dir = f"{output_dir}/cached_latents"
-        os.makedirs(cache_save_dir, exist_ok=True)
-
-        for i, batch in enumerate(tqdm(train_dataloader, desc="Caching Latents.")):
-
-            save_name = f"cached_{i}"
-            full_out_path =  f"{cache_save_dir}/{save_name}.pt"
-
-            pixel_values = batch['pixel_values'].to('cuda', dtype=torch.float16)
-            batch['pixel_values'] = tensor_to_vae_latent(pixel_values, vae)
-            for k, v in batch.items(): batch[k] = v[0]
-        
-            torch.save(batch, full_out_path)
-            del pixel_values
-            del batch
-
-            # We do this to avoid fragmentation from casting latents between devices.
-            torch.cuda.empty_cache()
-    else:
-        cache_save_dir = cached_latent_dir
-        
-
-    return torch.utils.data.DataLoader(
-        CachedDataset(cache_dir=cache_save_dir), 
-        batch_size=train_batch_size, 
-        shuffle=shuffle,
-        num_workers=0
-    ) 
 
 def handle_trainable_modules(model, trainable_modules, not_trainable_modules=[], is_enabled=True, negation=None):
     global already_printed_trainables
