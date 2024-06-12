@@ -399,7 +399,6 @@ def inject_trainable_lora_extended(
     """
     inject lora into model, and returns lora parameter groups.
     """
-
     require_grad_params = []
     names = []
 
@@ -454,7 +453,12 @@ def inject_trainable_lora_extended(
 
             _tmp.conv.weight = weight
             if bias is not None:
-                _tmp.conv.bias = bias                    
+                _tmp.conv.bias = bias  
+        else:
+            # for pretrained models based on zeroscope_v2_576w, which has
+            # <class 'diffusers.models.lora.LoRACompatibleLinear'> and
+            # <class 'diffusers.models.lora.LoRACompatibleConv'>
+            continue   
         # switch the module
         _tmp.to(_child_module.weight.device).to(_child_module.weight.dtype)
         if bias is not None:
@@ -956,7 +960,9 @@ def monkeypatch_or_replace_lora_extended(
 
             if bias is not None:
                 _tmp.conv.bias = bias
-
+        else:
+            # for pretrained models based on zeroscope_v2_576w
+            continue
         # switch the module
         _module._modules[name] = _tmp
 
