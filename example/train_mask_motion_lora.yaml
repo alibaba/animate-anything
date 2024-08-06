@@ -170,15 +170,15 @@ extra_text_encoder_params: null
   #adam_weight_decay: 0.2
 
 # How many batches to train. Not to be confused with video frames.
-train_batch_size: 2
+train_batch_size: 4
 # Maximum number of train steps. Model is saved after training.
-max_train_steps: 9
+max_train_steps: 1000
 
 # Saves a model every nth step.
-checkpointing_steps: 3
+checkpointing_steps: 100
 
 # How many steps to do for validation if sample_preview is enabled.
-validation_steps: 3
+validation_steps: 100
 
 # Which modules we want to unfreeze for the UNET. Advanced usage.
 # trainable_modules:
