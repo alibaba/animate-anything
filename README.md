@@ -61,7 +61,7 @@ https://github.com/alibaba/animate-anything/assets/1107525/e2659674-c813-402a-8a
 - 💥 Variable resolutions and aspect ratios.
 - 💥 Support Huggingface Demo / Google Colab.
   - ✅ support svd video2video Google Colab demo. See colab.ipynb.
-- 💥 Support LoRA finetuning.
+-  ✅ Support LoRA finetuning.
 - etc.
 
 ## Getting Started
@@ -164,6 +164,11 @@ All configuration details are placed in `example/train_mask_motion.yaml`. Each p
 You can finetune anymate-anything with text, motion mask, motion strength guidance on your own dataset. The following config requires around 30G GPU RAM. You can reduce the train_batch_size, train_data.width, train_data.height, and n_sample_frames in the config to reduce GPU RAM:
 ```
 python train.py --config example/train_mask_motion.yaml pretrained_model_path=<download_model>
+```
+
+We also support lora finetuning:
+```
+python train_lora.py --config example/train_mask_motion_lora.yaml pretrained_model_path=<download_model>
 ```
 
 ### Finetune Stable Video Diffusion:
