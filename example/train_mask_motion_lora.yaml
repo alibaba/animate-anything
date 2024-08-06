@@ -1,6 +1,6 @@
 # running scripts:
-#   accelerate launch --config_file example/deepspeed.yaml train.py --config example/train_mask_motion_lora.yaml
-#   python train.py --config example/train_mask_motion_lora.yaml --eval
+#   accelerate launch --config_file example/deepspeed.yaml train_lora.py --config example/train_mask_motion_lora.yaml
+#   python train_lora.py --config example/train_mask_motion_lora.yaml --eval
 
 # Pretrained diffusers model path.
 #pretrained_model_path: "output/latent/train_mask_motion" #https://huggingface.co/damo-vilab/text-to-video-ms-1.7b/tree/main
