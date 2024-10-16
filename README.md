@@ -8,6 +8,9 @@
 <!-- views since 24.04 -->
 </div>
 
+## Friendship Link 🔥
+- Our latest work: [Tora: Trajectory-oriented Diffusion Transformer for Video Generation](https://github.com/alibaba/Tora)
+
 ## Showcases
 
 https://github.com/alibaba/animate-anything/assets/1107525/e2659674-c813-402a-8a85-e620f0a6a454
