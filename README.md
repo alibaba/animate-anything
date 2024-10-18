@@ -9,7 +9,7 @@
 </div>
 
 ## Friendship Link 🔥
-- Our latest work: [Tora: Trajectory-oriented Diffusion Transformer for Video Generation](https://github.com/alibaba/Tora)
+- We are excited to announce the open-source release of our latest work: [Tora: Trajectory-oriented Diffusion Transformer for Video Generation](https://github.com/alibaba/Tora). It is the first trajectory-oriented DiT framework that concurrently integrates textual, visual, and trajectory conditions for video generation.
 
 ## Showcases
 
