@@ -135,3 +135,9 @@ dmypy.json
 .pyre/
 configs
 output
+
+# Claude settings
+.claude/*
+
+# Poetry lock file should NOT be ignored
+# poetry.lock
